@@ -1,0 +1,31 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+    background-color: #080c14;
+  }
+  body {
+    background-color: #080c14;
+    color: #b8c5d3;
+    font-family: 'Instrument Sans', sans-serif;
+    line-height: 1.65;
+    overflow-x: hidden;
+  }
+  ::selection {
+    background: rgba(0, 229, 160, 0.25);
+    color: #fff;
+  }
+}
+
+@layer utilities {
+  .text-gradient {
+    @apply bg-clip-text text-transparent bg-grad-main;
+  }
+  
+  .glass-panel {
+    @apply bg-surface2 border border-border rounded-xl backdrop-blur-md;
+  }
+}
