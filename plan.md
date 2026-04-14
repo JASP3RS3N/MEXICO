@@ -1,103 +1,172 @@
 # Development Plan — Factor·IA Dark Animated Landing Page (React + Tailwind + Framer Motion)
 
 ## 1) Objectives
-- Deliver a dark-themed, highly animated, Spanish landing page for **Factor·IA** matching the provided structure/text (hero → sections → CTA → footer).
-- Implement fluid, performant animations (entrances, scroll reveals, subtle ambient motion) with **Framer Motion**.
-- Build a clean, componentized React codebase using **Tailwind CSS** (responsive, accessible, Lighthouse-friendly).
-- Ship a V1 that is visually close to the reference, with smooth navigation and a working contact CTA.
+- Deliver a dark, modern, animated **Spanish-first** landing page for **Factor·IA** centered on the core promise: **cumplimiento IATF 16949 + compliance + trazabilidad automática** para proveedores **Tier 2/Tier 3**.
+- Ensure the message is unmistakable across hero + section headers: **“Tu cliente OEM te va a auditar. Con Factor·IA, ya cumples.”**
+- Implement fluid, performant motion using **Framer Motion**:
+  - Scroll reveal (fade-in + slide-up) in every section
+  - Hero counters (CountUp)
+  - Hover elevation + border/glow on cards
+  - Subtle animated gradient/particles/noise in hero
+  - Optional typing/reveal on a key phrase (motion-safe)
+- Maintain strict content rules:
+  - **Misión / Visión / Valores must be reproduced verbatim** (no edits).
+  - Main content in Spanish; **International** section includes English copy.
+  - **Contacto** uses **factor.iaops@gmail.com** across the site.
+- Incorporate requirements confirmed from the reference artifact:
+  - Add **Precios** section with **published prices** and included items.
+  - Keep the **IAtipsMX canal 1** link visible and reachable from nav: `iatipsmx-canal1.html`.
+- Keep a professional “piso de planta” tone: direct, industrial, compliance-first (not “IA genérica”).
+- Mobile-first: everything must work perfectly on mobile, including sticky nav and animations.
 
 ## 2) Implementation Steps
 
-### Phase 1 — Core Animation + Layout POC (isolation)
-Goal: prove the “hard” part (animated hero + scroll reveal system) feels right before building every section.
+### Phase 1 — Core Animation + Layout POC (Completed)
+Goal: prove the animation system + structure before final polish.
+
+**User stories (validated)**
+1. As a visitor, I see a high-impact hero in <5 seconds.
+2. As a visitor, scrolling reveals sections smoothly.
+3. As a visitor, sticky nav jumps to sections.
+4. As a mobile visitor, the page remains readable and fast.
+5. As a visitor with reduced motion, animations degrade gracefully.
+
+**Completed work (current state of repo)**
+- Set up React + Tailwind + Framer Motion.
+- Implemented reusable `ScrollReveal` wrapper.
+- Built sticky `TopNav` (desktop + mobile).
+- Built Hero with animated badge + scroll-reveal headline and **animated count-up counters** (via `CountUp`).
+- Implemented required core sections and order (except pricing):
+  - Problema, Garantías, Por qué, Misión/Visión/Valores (verbatim), Servicios (accordion), Contacto, Internacional, Footer.
+- Confirmed basic functionality through frontend testing:
+  - Responsive layout, anchors, mobile menu, scroll reveals.
+
+### Phase 2 — V1 Completion (In Progress → Updated with final spec + pricing + nav)
+Goal: ship the **complete** landing page matching the user’s spec, including **Precios** and **IAtipsMX canal 1 link**, plus UI polish.
 
 **User stories**
-1. As a visitor, I see an immediate animated hero message that explains the value prop in <5 seconds.
-2. As a visitor, scrolling reveals sections smoothly without jank.
-3. As a visitor, I can use the sticky nav to jump to sections reliably.
-4. As a visitor on mobile, animations remain smooth and do not block reading.
-5. As a visitor with reduced-motion enabled, animations are toned down.
+1. As a Tier 2/Tier 3 leader, I immediately understand this is about **OEM audit readiness**: IATF 16949 + compliance + traceability.
+2. As a visitor, I can scan guarantees/differentiators/services quickly (cards + accordion).
+3. As a visitor, I can access contact/diagnóstico CTA from anywhere.
+4. As a stakeholder, I see **published fixed monthly pricing** clearly.
+5. As a visitor, I can access **IAtipsMX — Negocios Locales (canal 1)** from the sticky nav.
 
-**Steps**
-- Initialize frontend stack: React + Tailwind + Framer Motion; define design tokens (colors, gradients, typography).
-- Build a **POC page** with:
-  - Sticky top nav (anchor links + active section highlight optional).
-  - Hero section with layered background (radial gradients / noise) + headline animation.
-  - 2–3 placeholder sections using a reusable `ScrollReveal` wrapper.
-- Add a global animation system:
-  - `prefers-reduced-motion` handling.
-  - Shared motion variants (fade/slide/stagger) + viewport triggers.
-- Performance pass: avoid heavy filters, keep transforms GPU-friendly, verify 60fps on typical laptop.
-- POC acceptance check: scroll + hero animations feel “premium” and consistent.
+**Steps (revised to incorporate confirmed new info)**
 
-### Phase 2 — V1 App Development (full landing page)
-Goal: build the complete landing page with final copy/structure, responsive styling, and working CTAs.
+1) **Navigation updates (TopNav)**
+- Add anchor link to **#precios**.
+- Add external link in nav:
+  - Label: **“🏪 IAtipsMX — Negocios Locales”**
+  - `href="iatipsmx-canal1.html"`
+  - Ensure it is visible on desktop and accessible from the mobile menu.
+
+2) **Add missing section: PRECIOS**
+- Create `src/components/Precios.js`.
+- Insert into the page flow (recommended: after `Servicios`, before `Contacto`) and add `id="precios"`.
+- Use the **exact tiers + copy constraints** below (no rounding / no rewording of plan contents):
+  - **Inicio — $85K MXN/mes** (5 servicios core)
+    - Asistente Piso de Planta
+    - Reportes Automáticos Calidad
+    - Traductor Técnico EN↔ES
+    - LPA Digitalizado con IA
+    - Asistente Legal LFT
+  - **Profesional — $185K MXN/mes** (11 servicios + 1 dashboard)
+    - Todo de Inicio +
+    - Motor de Análisis de RFQs
+    - Monitor de Riesgo SC
+    - Auditor de Inventario Inteligente
+    - App Captura Calidad + Pareto
+    - MRO + Entrenador Virtual
+    - Dashboard Gerencia + Corte Financiero
+  - **Enterprise — $320K MXN/mes** (16 servicios + 2 dashboards)
+    - Todo de Profesional +
+    - App 8D / 7-Step Kaizen
+    - Generadores IA (Flujos, Puestos, SOPs)
+    - Dashboard Director Multi-Planta
+    - Control de Cambios (ECM)
+    - Optimizador de Rutas RH
+    - Soporte prioritario
+  - **Total Plataforma — $450K+ MXN/mes** (20 servicios completos)
+    - Todo incluido… (mantener el concepto “Todo incluido” + bullets claros)
+- Apply the same interaction pattern as the rest of the site:
+  - Scroll reveal on section header + each card
+  - Hover elevation + glow + border intensification
+  - Featured styling for “Profesional” (como “best value”)
+
+3) **Hero modern UI polish (no content drift)**
+- Keep hero headline/subtitle/badge/CTAs exactly aligned with the provided identity.
+- Improve background feel:
+  - Add subtle animated gradient movement (CSS background-position animation) and/or noise overlay.
+  - Ensure no performance regressions and keep readability high.
+- Add a short “typing/reveal” effect on a key phrase (e.g., “ya cumples”), with `prefers-reduced-motion` fallback.
+
+4) **Servicios section robustness fix**
+- Fix the reported minor issue: first accordion item occasionally not expanding on first click.
+- Ensure deterministic open/close state (avoid `null` pitfalls, ensure correct keys, handle initial open state).
+- Optional UX improvement: add “Expandir todo / Colapsar todo” for mobile if it doesn’t clutter.
+
+5) **UI consistency pass (modernize glassmorphism)**
+- Allowed minor palette modernization while preserving brand anchors:
+  - Base background: `#080c14`
+  - Primary accent: `#00e5a0`
+  - Secondary: `#0ea5e9`
+  - Text: `#e8edf2`, `#b8c5d3`
+- Polish tokens/styles:
+  - Harmonize border opacity, hover glow, shadow softness
+  - Normalize card radii and padding across sections
+  - Maintain “industrial dashboard” vibe (glass panels, subtle gradients, technical mono labels)
+
+6) **QA + strict compliance checks**
+- Verify **Misión/Visión/Valores** are verbatim (exact quotes).
+- Verify every email is `factor.iaops@gmail.com`.
+- Verify International section includes the English line exactly:
+  - “You're global. Your plant in Mexico needs local AI.”
+- Verify anchors and nav:
+  - `#problema #garantias #porque #servicios #precios #contacto`
+- Run a final responsive + animation pass:
+  - Desktop/tablet/mobile
+  - Reduced-motion
+  - Ensure counters animate once, scroll reveals trigger once, no layout shift.
+
+### Phase 3 — Enhancements / Production Hardening (Planned)
+Goal: polish, maintainability, SEO, performance, and long-term editing.
 
 **User stories**
-1. As a visitor, I can quickly understand what Factor·IA is and what problems it solves.
-2. As a visitor, I can scan services/capabilities in well-structured sections.
-3. As a visitor, I can navigate to “Contacto/Demo” from anywhere.
-4. As a mobile visitor, the layout is readable and navigation is usable.
-5. As a visitor, I can trust the offer due to clear “privacy/on-prem” messaging and credibility cues.
+1. As a visitor, the page loads fast on mobile.
+2. As a visitor, social previews look correct.
+3. As a stakeholder, editing pricing/services is easy and safe.
+4. As an auditor-minded buyer, the site feels consistent and trustworthy.
+5. As a visitor, the UI remains smooth (no jank) with animations.
 
 **Steps**
-- Create page component structure (single-page app):
-  - `TopNav` (desktop + mobile drawer)
-  - `Hero`
-  - `Proof/Numbers` (if in source)
-  - `Services` (cards grid)
-  - `HowItWorks / Interface` section
-  - `UseCases` / `Industries`
-  - `Pricing/Packages` (if specified)
-  - `FAQ`
-  - `FinalCTA`
-  - `Footer`
-- Implement consistent section scaffolding:
-  - `SectionHeader` (label/title/desc)
-  - `Card` primitives (hover glow, border transitions)
-- Animations:
-  - Stagger card entrances per section.
-  - Hover micro-interactions (tilt/glow) with motion-safe constraints.
-  - Scroll progress accents where beneficial (subtle, not distracting).
-- Content wiring:
-  - Ensure **exact Spanish text** per the provided structure.
-  - Add mailto/WhatsApp link (or contact form if requested) for CTA.
-- Accessibility:
-  - Keyboard navigable nav + focus states.
-  - Semantic headings, aria labels for menu.
-- End of Phase 2: run 1 full pass of end-to-end UI testing (desktop + mobile) to confirm navigation, responsiveness, and no broken animations.
+- Refactor structured content into a config file (`content.js/ts`) for:
+  - Problema cards, Garantías, Diferenciadores, Valores, Servicios categories, **Pricing plans**.
+- SEO: OpenGraph/Twitter meta, favicon, title/description emphasizing IATF/compliance/traceability.
+- Performance: ensure hero ambient effects are lightweight; audit blur usage; check bundle size.
+- Accessibility: focus states, aria labels for mobile menu, semantic headings/lists.
+- Final regression testing including:
+  - Pricing correctness
+  - IAtipsMX link correctness
+  - Accordion reliability
 
-### Phase 3 — Enhancements / Production Hardening
-Goal: polish, reliability, and maintainability (without overbuilding).
-
-**User stories**
-1. As a visitor, I experience fast load times even on mobile data.
-2. As a visitor, I can share the page and previews look good on social.
-3. As a visitor, I can print/save key info without broken layout.
-4. As a stakeholder, I can update service cards and sections from a single config file.
-5. As a visitor, I never see layout shifts while fonts load.
-
-**Steps**
-- Refactor content into a `content.ts` config (arrays for cards/FAQ) to reduce duplication.
-- Add SEO basics: OpenGraph/Twitter meta, favicon, correct titles/descriptions.
-- Optimize assets: font loading strategy, optional local fonts, reduce CSS/JS where possible.
-- Add `ErrorBoundary` + safe guards for motion viewport triggers.
-- Visual QA: cross-browser (Chrome/Safari/Firefox), reduced-motion, small screens.
-- End of Phase 3: run another end-to-end testing round focusing on regressions, performance, and accessibility.
-
-### Phase 4 — Optional Add-ons (only if requested)
-- Contact form with validation + backend email relay (adds integration complexity).
-- Analytics (Plausible/GA) with consent-friendly setup.
-- Multi-language toggle (ES/EN) if needed.
+### Phase 4 — Optional Add-ons (Only if requested)
+- Contact form with validation + backend email relay.
+- Analytics (Plausible/GA) with privacy-friendly defaults.
+- Multilingual toggle (ES/EN) beyond the International section.
 
 ## 3) Next Actions
-- Confirm: Do you want **pure landing (no backend)** with `mailto:`/WhatsApp CTA, or a **contact form** submission endpoint?
-- Confirm: Should the build match the provided HTML artifact 1:1, or can we simplify while keeping the same look/feel?
-- Proceed with Phase 1 POC: implement hero + scroll reveal + sticky nav and validate animation quality.
+1. Implement `Precios.js` with the **exact** tiers and amounts:
+   - Inicio $85K, Profesional $185K, Enterprise $320K, Total $450K+ (MXN/mes)
+2. Add `#precios` to nav and add **IAtipsMX — Negocios Locales** link to `iatipsmx-canal1.html` in `TopNav` (desktop + mobile).
+3. Fix Servicios accordion first-click inconsistency.
+4. Apply final modern UI polish (glow, glass, hero ambient motion) without changing required text.
+5. Run final QA sweep (responsive + reduced-motion + anchors + console).
 
 ## 4) Success Criteria
-- The landing page matches the intended dark aesthetic and section structure, with accurate Spanish copy.
-- Animations are smooth (no jank), consistent, and respect `prefers-reduced-motion`.
-- Fully responsive: mobile/tablet/desktop layouts are readable and usable.
-- CTAs work (navigate to contact target) and nav anchors scroll to correct sections.
-- No console errors; basic Lighthouse checks pass (good accessibility + no major performance red flags).
+- The landing page follows the required section order and keeps the central IATF/compliance/traceability positioning.
+- **Misión/Visión/Valores are reproduced exactly** (verbatim).
+- Animations meet requirements: scroll reveal + hero counters + hover glow + subtle hero ambient motion; respects `prefers-reduced-motion`.
+- **Pricing is present and matches the published tiers exactly**:
+  - Inicio $85K, Profesional $185K, Enterprise $320K, Total $450K+ MXN/mes.
+- Nav includes the **IAtipsMX canal 1** link and all anchors work on mobile.
+- No console errors; mobile performance is strong; accessibility is solid.

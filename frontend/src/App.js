@@ -6,6 +6,7 @@ import { Garantias } from './components/Garantias';
 import { Porque } from './components/Porque';
 import { Mision } from './components/Mision';
 import { Servicios } from './components/Servicios';
+import { Precios } from './components/Precios';
 import { Contacto } from './components/Contacto';
 import { Internacional } from './components/Internacional';
 import { Footer } from './components/Footer';
@@ -21,6 +22,7 @@ function App() {
         <Porque />
         <Mision />
         <Servicios />
+        <Precios />
         <Contacto />
         <Internacional />
       </main>

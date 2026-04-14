@@ -4,7 +4,11 @@ import { ChevronDown, ChevronUp, Layers, Box, Truck, FileText, Settings, Activit
 import { motion, AnimatePresence } from 'framer-motion';
 
 export const Servicios = () => {
-  const [open, setOpen] = useState(0);
+  const [openIndex, setOpenIndex] = useState(0);
+
+  const toggleAccordion = (index) => {
+    setOpenIndex(openIndex === index ? -1 : index);
+  };
 
   const categorias = [
     {
@@ -47,40 +51,52 @@ export const Servicios = () => {
             <div className="w-12 h-px bg-cyan"></div>
             <span className="font-mono text-xs uppercase tracking-widest text-cyan">20 Servicios IA</span>
           </div>
-          <h2 className="font-display text-3xl md:text-5xl font-bold text-textBright mb-16 leading-tight">
-            Todo lo que necesitas, <span className="text-cyan">en un solo lugar</span>
-          </h2>
+          <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-16">
+            <h2 className="font-display text-3xl md:text-5xl font-bold text-textBright leading-tight max-w-2xl">
+              Todo lo que necesitas, <span className="text-cyan">en un solo lugar</span>
+            </h2>
+            <button 
+              onClick={() => setOpenIndex(openIndex === -1 ? 0 : -1)}
+              className="font-mono text-xs uppercase tracking-widest text-textDim hover:text-cyan transition-colors"
+            >
+              {openIndex === -1 ? "Expandir Primero" : "Colapsar Todo"}
+            </button>
+          </div>
         </ScrollReveal>
 
         <div className="space-y-4">
-          {categorias.map((cat, i) => (
-            <ScrollReveal key={i} delay={i * 0.05}>
-              <div className="glass-panel border border-border rounded-xl overflow-hidden">
+          {categorias.map((cat, index) => (
+            <ScrollReveal key={index} delay={index * 0.05}>
+              <div className={`glass-panel border rounded-xl overflow-hidden transition-colors ${openIndex === index ? 'border-cyan/30 bg-surface3/50' : 'border-border'}`}>
                 <button 
-                  onClick={() => setOpen(open === i ? null : i)}
+                  onClick={() => toggleAccordion(index)}
                   className="w-full flex items-center justify-between p-6 hover:bg-surface3 transition-colors text-left"
                 >
-                  <div className="flex items-center gap-4">
-                    <div className="bg-surface3 p-3 rounded-xl">{cat.icon}</div>
+                  <div className="flex items-center gap-5">
+                    <div className={`p-3 rounded-xl transition-colors ${openIndex === index ? 'bg-background' : 'bg-surface3'}`}>
+                      {cat.icon}
+                    </div>
                     <h3 className="font-display font-bold text-textBright text-xl md:text-2xl">{cat.titulo}</h3>
                   </div>
-                  {open === i ? <ChevronUp className="text-textDim" /> : <ChevronDown className="text-textDim" />}
+                  {openIndex === index ? <ChevronUp className="text-cyan w-6 h-6" /> : <ChevronDown className="text-textDim w-6 h-6" />}
                 </button>
-                <AnimatePresence>
-                  {open === i && (
+                <AnimatePresence initial={false}>
+                  {openIndex === index && (
                     <motion.div 
                       initial={{ height: 0, opacity: 0 }}
                       animate={{ height: "auto", opacity: 1 }}
                       exit={{ height: 0, opacity: 0 }}
-                      className="border-t border-border overflow-hidden"
+                      transition={{ duration: 0.3, ease: "easeInOut" }}
                     >
-                      <div className="p-6 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-                        {cat.items.map((item, idx) => (
-                          <div key={idx} className="flex items-center gap-3">
-                            <span className="w-2 h-2 rounded-full bg-cyan/50"></span>
-                            <span className="font-mono text-sm text-textMain">{item}</span>
-                          </div>
-                        ))}
+                      <div className="border-t border-border/50">
+                        <div className="p-6 pt-4 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-5">
+                          {cat.items.map((item, idx) => (
+                            <div key={idx} className="flex items-center gap-3">
+                              <span className="w-1.5 h-1.5 rounded-full bg-cyan/50 shrink-0"></span>
+                              <span className="font-mono text-sm md:text-base text-textMain">{item}</span>
+                            </div>
+                          ))}
+                        </div>
                       </div>
                     </motion.div>
                   )}
