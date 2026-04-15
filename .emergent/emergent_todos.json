@@ -1,0 +1,30 @@
+[
+  {
+    "content": "Phase 2: Revisar plantilla actual del proyecto y dependencias existentes",
+    "status": "in_progress"
+  },
+  {
+    "content": "Phase 2: Obtener lineamientos de diseño premium para la landing one-page de IAtipsMX",
+    "status": "pending"
+  },
+  {
+    "content": "Phase 2: Implementar backend de leads con FastAPI + MongoDB",
+    "status": "pending"
+  },
+  {
+    "content": "Phase 2: Implementar frontend one-page con animaciones, selector de sectores y CTAs",
+    "status": "pending"
+  },
+  {
+    "content": "Phase 2: Verificar logs, corregir errores y alinear con plan",
+    "status": "pending"
+  },
+  {
+    "content": "Phase 2: End to End Testing using Testing Agent",
+    "status": "pending"
+  },
+  {
+    "content": "Phase 2: All user stories covered in Development and testing",
+    "status": "pending"
+  }
+]
