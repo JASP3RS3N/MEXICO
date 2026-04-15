@@ -1,0 +1,37 @@
+{
+  "total_tests": 5,
+  "passed_tests": 4,
+  "success_rate": 80.0,
+  "results": [
+    {
+      "test": "Health Check",
+      "success": true,
+      "details": "Service: iatipsmx-landing, DB: test_database",
+      "timestamp": "2026-04-15T02:44:13.404715"
+    },
+    {
+      "test": "Create Lead",
+      "success": true,
+      "details": "Lead ID: 69defb7df0166321c471ab42",
+      "timestamp": "2026-04-15T02:44:13.539623"
+    },
+    {
+      "test": "List Leads",
+      "success": true,
+      "details": "Found 3 leads",
+      "timestamp": "2026-04-15T02:44:13.646587"
+    },
+    {
+      "test": "Invalid Sector Validation",
+      "success": false,
+      "details": "Expected 400, got 422",
+      "timestamp": "2026-04-15T02:44:13.766896"
+    },
+    {
+      "test": "Missing Fields Validation",
+      "success": true,
+      "details": "Correctly rejected incomplete data",
+      "timestamp": "2026-04-15T02:44:13.863674"
+    }
+  ]
+}
