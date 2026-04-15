@@ -1,14 +1,14 @@
 [
   {
     "content": "Phase 2: Verificar logs, corregir errores y alinear con plan",
-    "status": "in_progress"
+    "status": "completed"
   },
   {
     "content": "Phase 2: End to End Testing using Testing Agent",
-    "status": "pending"
+    "status": "completed"
   },
   {
     "content": "Phase 2: All user stories covered in Development and testing",
-    "status": "pending"
+    "status": "completed"
   }
 ]
