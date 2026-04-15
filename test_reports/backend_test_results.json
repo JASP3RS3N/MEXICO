@@ -7,31 +7,31 @@
       "test": "Health Check",
       "success": true,
       "details": "Service: iatipsmx-landing, DB: test_database",
-      "timestamp": "2026-04-15T02:44:13.404715"
+      "timestamp": "2026-04-15T02:49:29.318797"
     },
     {
       "test": "Create Lead",
       "success": true,
-      "details": "Lead ID: 69defb7df0166321c471ab42",
-      "timestamp": "2026-04-15T02:44:13.539623"
+      "details": "Lead ID: 69defcb9f0166321c471ab44",
+      "timestamp": "2026-04-15T02:49:29.462067"
     },
     {
       "test": "List Leads",
       "success": true,
-      "details": "Found 3 leads",
-      "timestamp": "2026-04-15T02:44:13.646587"
+      "details": "Found 5 leads",
+      "timestamp": "2026-04-15T02:49:29.608004"
     },
     {
       "test": "Invalid Sector Validation",
       "success": false,
       "details": "Expected 400, got 422",
-      "timestamp": "2026-04-15T02:44:13.766896"
+      "timestamp": "2026-04-15T02:49:29.802962"
     },
     {
       "test": "Missing Fields Validation",
       "success": true,
       "details": "Correctly rejected incomplete data",
-      "timestamp": "2026-04-15T02:44:13.863674"
+      "timestamp": "2026-04-15T02:49:29.914045"
     }
   ]
 }

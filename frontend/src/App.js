@@ -803,6 +803,15 @@ function Hero({ reducedMotion }) {
 }
 
 function StickyNav({ activeSection }) {
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+
+  const handleMobileNavigate = (targetId) => {
+    setIsMenuOpen(false);
+    window.setTimeout(() => {
+      scrollToSection(targetId);
+    }, 80);
+  };
+
   return (
     <header className="sticky-nav">
       <div className="container nav-inner">
@@ -850,7 +859,7 @@ function StickyNav({ activeSection }) {
             Consulta gratis
           </Button>
 
-          <Sheet>
+          <Sheet open={isMenuOpen} onOpenChange={setIsMenuOpen}>
             <SheetTrigger asChild>
               <Button
                 variant="outline"
@@ -876,7 +885,7 @@ function StickyNav({ activeSection }) {
                     key={item.id}
                     className="mobile-menu-link"
                     data-testid={`mobile-nav-${item.id}-button`}
-                    onClick={() => scrollToSection(item.id)}
+                    onClick={() => handleMobileNavigate(item.id)}
                   >
                     {item.label}
                     <ChevronRight className="h-4 w-4" />
@@ -887,7 +896,7 @@ function StickyNav({ activeSection }) {
                 <Button
                   className="w-full"
                   data-testid="mobile-menu-contact-button"
-                  onClick={() => scrollToSection("contact")}
+                  onClick={() => handleMobileNavigate("contact")}
                 >
                   Consulta gratis
                 </Button>
@@ -895,7 +904,10 @@ function StickyNav({ activeSection }) {
                   variant="outline"
                   className="w-full"
                   data-testid="mobile-menu-factorai-button"
-                  onClick={() => window.open("https://www.factorai.mx", "_blank", "noopener,noreferrer")}
+                  onClick={() => {
+                    setIsMenuOpen(false);
+                    window.open("https://www.factorai.mx", "_blank", "noopener,noreferrer");
+                  }}
                 >
                   Volver a Factor·IA
                 </Button>
