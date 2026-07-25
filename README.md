@@ -27,7 +27,11 @@ FastAPI · MongoDB (Motor) · JWT + bcrypt · React 19 · Tailwind · Recharts.
 
 ## Ejecutar localmente
 
-### Backend
+> **¿Windows y lo quieres fácil?** Usa Docker: un solo comando levanta todo.
+> Guía paso a paso en [`CORRER_LOCAL.md`](./CORRER_LOCAL.md).
+> `docker compose up --build` → abre http://localhost:3000
+
+### Backend (manual)
 ```bash
 cd backend
 pip install -r requirements.txt
