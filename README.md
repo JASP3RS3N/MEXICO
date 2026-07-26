@@ -21,6 +21,7 @@ finanzas visibles **solo para el dueño**.
 - 💰 **Gastos operativos**: renta, nómina, servicios… alimentan el P&L.
 - 📊 **Dashboard P&L (solo dueño)**: ingresos, COGS, utilidad bruta/neta, márgenes, ventas por día/categoría/hora, top de productos, métodos de pago.
 - 👥 **Usuarios y ajustes**: alta de cuentas, moneda e IVA.
+- 🤖 **Asistente IA local (solo dueño)**: copiloto con tu propia IA vía **LM Studio** (privado, sin nube; accesible por **Tailscale**). Consulta finanzas/ventas, analiza el menú, y **ejecuta acciones**: crea órdenes de compra, levanta pedidos y ajusta precios (function-calling). Ver [`CORRER_LOCAL.md`](./CORRER_LOCAL.md#-asistente-ia-local-lm-studio--tailscale).
 
 ## Stack
 FastAPI · MongoDB (Motor) · JWT + bcrypt · React 19 · Tailwind · Recharts.

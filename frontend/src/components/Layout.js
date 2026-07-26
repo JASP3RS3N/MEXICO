@@ -16,6 +16,7 @@ import {
   Menu as MenuIcon,
   X,
   Flame,
+  Bot,
 } from "lucide-react";
 import { useAuth, ROLE_LABELS } from "@/context/AuthContext";
 import api from "@/lib/api";
@@ -23,6 +24,7 @@ import { cn } from "@/lib/utils";
 
 const NAV = [
   { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard, roles: ["owner"] },
+  { to: "/asistente", label: "Asistente IA", icon: Bot, roles: ["owner"] },
   { to: "/pos", label: "Punto de Venta", icon: ConciergeBell, roles: ["owner", "cashier"] },
   { to: "/ordenes", label: "Órdenes", icon: Receipt, roles: ["owner", "cashier"] },
   { to: "/cocina", label: "Cocina", icon: ChefHat, roles: ["owner", "prep"] },

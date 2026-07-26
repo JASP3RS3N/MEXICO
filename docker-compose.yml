@@ -19,6 +19,16 @@ services:
       JWT_SECRET: cambia-esto-en-produccion
       CORS_ORIGINS: http://localhost:3000
       SEED_DEMO: "true"
+      # --- Asistente IA (LM Studio) ---
+      AI_ENABLED: "true"
+      # LM Studio en la MISMA PC: deja host.docker.internal.
+      # LM Studio en otra máquina por Tailscale: usa http://TU-IP-TAILSCALE:1234/v1
+      LMSTUDIO_BASE_URL: "http://host.docker.internal:1234/v1"
+      # Opcional: fija un modelo; si se deja vacío usa el que esté cargado.
+      LMSTUDIO_MODEL: ""
+    extra_hosts:
+      # Permite que el contenedor llegue a LM Studio corriendo en el host.
+      - "host.docker.internal:host-gateway"
     ports:
       - "8001:8001"
     depends_on:

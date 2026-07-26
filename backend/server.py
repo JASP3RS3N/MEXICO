@@ -26,6 +26,7 @@ import routes_menu
 import routes_inventory
 import routes_orders
 import routes_finance
+import routes_ai
 
 logging.basicConfig(
     level=logging.INFO,
@@ -54,6 +55,7 @@ api_router.include_router(routes_menu.router, tags=["menu"])
 api_router.include_router(routes_inventory.router, tags=["inventory"])
 api_router.include_router(routes_orders.router, tags=["orders"])
 api_router.include_router(routes_finance.router, tags=["finance"])
+api_router.include_router(routes_ai.router, tags=["ai"])
 
 app.include_router(api_router)
 

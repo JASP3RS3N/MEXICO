@@ -17,6 +17,7 @@ import PurchaseOrders from "@/pages/PurchaseOrders";
 import Expenses from "@/pages/Expenses";
 import Users from "@/pages/Users";
 import SettingsPage from "@/pages/Settings";
+import Assistant from "@/pages/Assistant";
 
 function RoleHome() {
   const { user } = useAuth();
@@ -49,6 +50,7 @@ export default function App() {
 
           <Route path="/" element={<Protected><RoleHome /></Protected>} />
           <Route path="/dashboard" element={<Protected roles={["owner"]}><Dashboard /></Protected>} />
+          <Route path="/asistente" element={<Protected roles={["owner"]}><Assistant /></Protected>} />
           <Route path="/pos" element={<Protected roles={["owner", "cashier"]}><POS /></Protected>} />
           <Route path="/ordenes" element={<Protected roles={["owner", "cashier"]}><Orders /></Protected>} />
           <Route path="/cocina" element={<Protected roles={["owner", "prep"]}><Kitchen /></Protected>} />
