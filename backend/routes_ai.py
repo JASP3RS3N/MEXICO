@@ -4,10 +4,14 @@ Owner-only. The endpoint runs an agentic loop: it sends the conversation + tool
 definitions to LM Studio, executes any tool calls against the system, and returns
 the final answer plus a log of actions taken. The LM Studio base URL is configurable
 so it can point at a Tailscale address (e.g. http://100.x.x.x:1234/v1).
+
+Robust to models that emit tool calls as plain text (e.g. Qwen/coder variants)
+instead of the structured ``tool_calls`` field — those are parsed and executed too.
 """
 import json
 import logging
 import os
+import re
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
@@ -26,6 +30,8 @@ LMSTUDIO_API_KEY = os.environ.get("LMSTUDIO_API_KEY", "lm-studio")
 MAX_TOOL_ROUNDS = int(os.environ.get("AI_MAX_TOOL_ROUNDS", "6"))
 REQUEST_TIMEOUT = float(os.environ.get("AI_TIMEOUT", "180"))
 
+KNOWN_TOOLS = {t["function"]["name"] for t in TOOLS}
+
 SYSTEM_PROMPT = (
     "Eres el asistente de negocio de un restaurante smokehouse, exclusivo para el dueño. "
     "Respondes SIEMPRE en español, claro y conciso, con cifras concretas. "
@@ -35,6 +41,8 @@ SYSTEM_PROMPT = (
     "Cuando el dueño te pida crear una orden de compra, levantar un pedido o cambiar un precio, "
     "hazlo con la herramienta correspondiente y confirma con un resumen de lo realizado. "
     "Para acciones grandes, costosas o ambiguas, confirma primero con una pregunta breve. "
+    "Cuando ya tengas el resultado de una herramienta, responde en prosa al dueño; no vuelvas a "
+    "escribir la llamada de la herramienta ni muestres JSON. "
     "Al analizar el menú o las finanzas, ofrece recomendaciones accionables (precios, márgenes, reorden, ahorro)."
 )
 
@@ -48,6 +56,84 @@ class ChatRequest(BaseModel):
     messages: list[ChatMessage]
 
 
+# ---------------------------------------------------------------------------
+# Tool-call extraction (native OR text-emitted)
+# ---------------------------------------------------------------------------
+def _first_json_object(text: str):
+    """Return the first balanced {...} substring (tolerates trailing junk/extra braces)."""
+    start = text.find("{")
+    if start == -1:
+        return None
+    depth, in_str, esc = 0, False, False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+        else:
+            if ch == '"':
+                in_str = True
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    return text[start : i + 1]
+    return None
+
+
+def _parse_text_tool_calls(content: str):
+    """Parse tool calls a model wrote as text (``<tool_call>``, code fences, or raw JSON)."""
+    if not content:
+        return []
+    candidates = re.findall(r"<tool_call>\s*(.*?)\s*</tool_call>", content, re.DOTALL)
+    if not candidates:
+        candidates = re.findall(r"```(?:json|tool_call)?\s*(.*?)```", content, re.DOTALL)
+    if not candidates:
+        candidates = [content]
+
+    calls = []
+    for c in candidates:
+        obj_str = _first_json_object(c)
+        if not obj_str:
+            continue
+        try:
+            obj = json.loads(obj_str)
+        except json.JSONDecodeError:
+            continue
+        name = obj.get("name") or obj.get("tool") or obj.get("function")
+        if name not in KNOWN_TOOLS:
+            continue
+        args = obj.get("arguments", obj.get("parameters", {}))
+        if isinstance(args, str):
+            try:
+                args = json.loads(args)
+            except json.JSONDecodeError:
+                args = {}
+        calls.append({"name": name, "arguments": args or {}})
+    return calls
+
+
+def _normalize_calls(msg: dict):
+    """Return (calls, is_native). Native uses tool_calls; else parse from content text."""
+    native = msg.get("tool_calls") or []
+    if native:
+        out = []
+        for c in native:
+            fn = c.get("function", {})
+            try:
+                args = json.loads(fn.get("arguments") or "{}")
+            except json.JSONDecodeError:
+                args = {}
+            out.append({"id": c.get("id", ""), "name": fn.get("name", ""), "arguments": args})
+        return out, True
+    return _parse_text_tool_calls(msg.get("content") or ""), False
+
+
 async def _resolve_model(client: httpx.AsyncClient) -> str:
     if LMSTUDIO_MODEL:
         return LMSTUDIO_MODEL
@@ -59,6 +145,9 @@ async def _resolve_model(client: httpx.AsyncClient) -> str:
     return data[0]["id"]
 
 
+# ---------------------------------------------------------------------------
+# Endpoints
+# ---------------------------------------------------------------------------
 @router.get("/ai/status")
 async def ai_status(user: dict = Depends(require_owner)):
     if not AI_ENABLED:
@@ -91,48 +180,48 @@ async def ai_chat(payload: ChatRequest, user: dict = Depends(require_owner)):
             model = await _resolve_model(client)
 
             for _ in range(MAX_TOOL_ROUNDS):
-                body = {
-                    "model": model,
-                    "messages": messages,
-                    "tools": TOOLS,
-                    "tool_choice": "auto",
-                    "temperature": 0.3,
-                }
+                body = {"model": model, "messages": messages, "tools": TOOLS, "tool_choice": "auto", "temperature": 0.3}
                 resp = await client.post(f"{LMSTUDIO_BASE_URL}/chat/completions", headers=headers, json=body)
                 resp.raise_for_status()
-                choice = resp.json()["choices"][0]
-                msg = choice["message"]
-                tool_calls = msg.get("tool_calls") or []
+                msg = resp.json()["choices"][0]["message"]
+                calls, is_native = _normalize_calls(msg)
 
-                if not tool_calls:
-                    return {"reply": msg.get("content", "") or "", "actions": actions}
+                if not calls:
+                    return {"reply": (msg.get("content") or "").strip(), "actions": actions}
 
-                # Record the assistant's tool-call turn, then execute each call.
-                messages.append({"role": "assistant", "content": msg.get("content") or "", "tool_calls": tool_calls})
-                for call in tool_calls:
-                    fn = call.get("function", {})
-                    name = fn.get("name", "")
+                if is_native:
+                    messages.append({"role": "assistant", "content": msg.get("content") or "", "tool_calls": msg["tool_calls"]})
+                else:
+                    # Keep the model's raw turn, then feed results back as user messages
+                    # (compatible with models that don't support the tool role).
+                    messages.append({"role": "assistant", "content": msg.get("content") or ""})
+
+                for c in calls:
                     try:
-                        args = json.loads(fn.get("arguments") or "{}")
-                    except json.JSONDecodeError:
-                        args = {}
-                    try:
-                        result, summary = await execute_tool(name, args, user)
+                        result, summary = await execute_tool(c["name"], c["arguments"], user)
                     except Exception as exc:  # noqa: BLE001
-                        logger.exception("Error en herramienta %s", name)
+                        logger.exception("Error en herramienta %s", c["name"])
                         result, summary = {"error": str(exc)}, None
                     if summary:
                         actions.append(summary)
-                    messages.append(
-                        {"role": "tool", "tool_call_id": call.get("id", ""), "name": name, "content": json.dumps(result, ensure_ascii=False)}
-                    )
+                    payload_json = json.dumps(result, ensure_ascii=False)
+                    if is_native:
+                        messages.append({"role": "tool", "tool_call_id": c.get("id", ""), "name": c["name"], "content": payload_json})
+                    else:
+                        messages.append({
+                            "role": "user",
+                            "content": (
+                                f"[Resultado de la herramienta {c['name']}]:\n{payload_json}\n\n"
+                                "Usa estos datos para responderme en español. No vuelvas a llamar la herramienta si ya tienes lo necesario."
+                            ),
+                        })
 
-            # Ran out of rounds — ask the model for a final answer without tools.
+            # Out of tool rounds — force a final natural-language answer without tools.
             body = {"model": model, "messages": messages, "temperature": 0.3}
             resp = await client.post(f"{LMSTUDIO_BASE_URL}/chat/completions", headers=headers, json=body)
             resp.raise_for_status()
             final = resp.json()["choices"][0]["message"].get("content", "")
-            return {"reply": final or "Listo.", "actions": actions}
+            return {"reply": (final or "Listo.").strip(), "actions": actions}
 
     except httpx.HTTPStatusError as exc:
         raise HTTPException(status_code=502, detail=f"LM Studio respondió con error: {exc.response.status_code}")

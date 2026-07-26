@@ -95,5 +95,14 @@ with client:  # startup seeds data
     res, _ = run("create_order", {"items": [{"product": "NoExiste ABC", "qty": 1}]})
     check("unknown product handled gracefully", "error" in res)
 
+print("\n== Text-emitted tool-call parser (Qwen/coder compat) ==")
+from routes_ai import _parse_text_tool_calls  # noqa: E402
+
+check("parses raw JSON with extra trailing brace", _parse_text_tool_calls('{"name": "get_financial_summary", "arguments": {"period": "today"}}}') == [{"name": "get_financial_summary", "arguments": {"period": "today"}}])
+check("parses <tool_call> tags", _parse_text_tool_calls('<tool_call>{"name":"list_low_stock","arguments":{}}</tool_call>')[0]["name"] == "list_low_stock")
+check("parses code fence", _parse_text_tool_calls('```json\n{"name":"list_menu","arguments":{}}\n```')[0]["name"] == "list_menu")
+check("no false positive on normal prose", _parse_text_tool_calls("La venta de hoy fue de $1,234.") == [])
+check("ignores unknown tool names", _parse_text_tool_calls('{"name":"rm_rf","arguments":{}}') == [])
+
 print(f"\n==== RESULT: {PASS} passed, {FAIL} failed ====")
 raise SystemExit(1 if FAIL else 0)
