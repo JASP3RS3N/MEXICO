@@ -31,6 +31,17 @@ MAX_TOOL_ROUNDS = int(os.environ.get("AI_MAX_TOOL_ROUNDS", "6"))
 REQUEST_TIMEOUT = float(os.environ.get("AI_TIMEOUT", "180"))
 
 KNOWN_TOOLS = {t["function"]["name"] for t in TOOLS}
+WRITE_TOOLS = {"create_purchase_order", "create_order", "update_product_price"}
+
+
+def _fallback_reply(actions: list) -> str:
+    if actions:
+        return "Listo. Esto es lo que hice:\n- " + "\n- ".join(actions)
+    return (
+        "Ya consulté la información, pero el modelo no generó un resumen en texto. "
+        "Vuelve a intentarlo, o carga un modelo *instruct* (p. ej. Qwen2.5-7B-Instruct o "
+        "Llama-3.1-8B-Instruct), que conversa mucho mejor que los modelos 'coder'."
+    )
 
 SYSTEM_PROMPT = (
     "Eres el asistente de negocio de un restaurante smokehouse, exclusivo para el dueño. "
@@ -157,7 +168,7 @@ async def ai_status(user: dict = Depends(require_owner)):
             r = await client.get(f"{LMSTUDIO_BASE_URL}/models", headers={"Authorization": f"Bearer {LMSTUDIO_API_KEY}"})
             r.raise_for_status()
             models = [m["id"] for m in r.json().get("data", [])]
-        return {"enabled": True, "connected": True, "base_url": LMSTUDIO_BASE_URL, "models": models, "model": LMSTUDIO_MODEL or (models[0] if models else None)}
+        return {"enabled": True, "connected": True, "base_url": LMSTUDIO_BASE_URL, "models": models, "model": LMSTUDIO_MODEL or (models[0] if models else None), "build": "ai-3-textparse"}
     except Exception as exc:  # noqa: BLE001
         return {"enabled": True, "connected": False, "base_url": LMSTUDIO_BASE_URL, "detail": f"No se pudo conectar a LM Studio: {exc}"}
 
@@ -173,37 +184,51 @@ async def ai_chat(payload: ChatRequest, user: dict = Depends(require_owner)):
             messages.append({"role": m.role, "content": m.content})
 
     actions = []
+    executed = {}  # signature -> result, so repeated write calls don't run twice
     headers = {"Authorization": f"Bearer {LMSTUDIO_API_KEY}", "Content-Type": "application/json"}
+    send_tools = True  # after a text-mode tool round we drop tools to force a prose answer
+
+    async def _complete(client, with_tools):
+        b = {"model": model, "messages": messages, "temperature": 0.3}
+        if with_tools:
+            b["tools"] = TOOLS
+            b["tool_choice"] = "auto"
+        r = await client.post(f"{LMSTUDIO_BASE_URL}/chat/completions", headers=headers, json=b)
+        r.raise_for_status()
+        return r.json()["choices"][0]["message"]
 
     try:
         async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
             model = await _resolve_model(client)
 
             for _ in range(MAX_TOOL_ROUNDS):
-                body = {"model": model, "messages": messages, "tools": TOOLS, "tool_choice": "auto", "temperature": 0.3}
-                resp = await client.post(f"{LMSTUDIO_BASE_URL}/chat/completions", headers=headers, json=body)
-                resp.raise_for_status()
-                msg = resp.json()["choices"][0]["message"]
-                calls, is_native = _normalize_calls(msg)
+                msg = await _complete(client, send_tools)
+                calls, is_native = _normalize_calls(msg) if send_tools else ([], False)
 
                 if not calls:
-                    return {"reply": (msg.get("content") or "").strip(), "actions": actions}
+                    # A real answer. If a stubborn model still handed back tool JSON, hide it.
+                    content = (msg.get("content") or "").strip()
+                    if _parse_text_tool_calls(content):
+                        content = _fallback_reply(actions)
+                    return {"reply": content or _fallback_reply(actions), "actions": actions}
 
-                if is_native:
-                    messages.append({"role": "assistant", "content": msg.get("content") or "", "tool_calls": msg["tool_calls"]})
-                else:
-                    # Keep the model's raw turn, then feed results back as user messages
-                    # (compatible with models that don't support the tool role).
-                    messages.append({"role": "assistant", "content": msg.get("content") or ""})
+                messages.append(
+                    {"role": "assistant", "content": msg.get("content") or "", **({"tool_calls": msg["tool_calls"]} if is_native else {})}
+                )
 
                 for c in calls:
-                    try:
-                        result, summary = await execute_tool(c["name"], c["arguments"], user)
-                    except Exception as exc:  # noqa: BLE001
-                        logger.exception("Error en herramienta %s", c["name"])
-                        result, summary = {"error": str(exc)}, None
-                    if summary:
-                        actions.append(summary)
+                    sig = c["name"] + "|" + json.dumps(c["arguments"], sort_keys=True, ensure_ascii=False)
+                    if c["name"] in WRITE_TOOLS and sig in executed:
+                        result, summary = executed[sig], None  # don't repeat side effects
+                    else:
+                        try:
+                            result, summary = await execute_tool(c["name"], c["arguments"], user)
+                        except Exception as exc:  # noqa: BLE001
+                            logger.exception("Error en herramienta %s", c["name"])
+                            result, summary = {"error": str(exc)}, None
+                        executed[sig] = result
+                        if summary:
+                            actions.append(summary)
                     payload_json = json.dumps(result, ensure_ascii=False)
                     if is_native:
                         messages.append({"role": "tool", "tool_call_id": c.get("id", ""), "name": c["name"], "content": payload_json})
@@ -212,16 +237,20 @@ async def ai_chat(payload: ChatRequest, user: dict = Depends(require_owner)):
                             "role": "user",
                             "content": (
                                 f"[Resultado de la herramienta {c['name']}]:\n{payload_json}\n\n"
-                                "Usa estos datos para responderme en español. No vuelvas a llamar la herramienta si ya tienes lo necesario."
+                                "Ahora responde al dueño en español con un resumen claro usando estos datos. "
+                                "No vuelvas a escribir ninguna llamada de herramienta ni JSON."
                             ),
                         })
 
-            # Out of tool rounds — force a final natural-language answer without tools.
-            body = {"model": model, "messages": messages, "temperature": 0.3}
-            resp = await client.post(f"{LMSTUDIO_BASE_URL}/chat/completions", headers=headers, json=body)
-            resp.raise_for_status()
-            final = resp.json()["choices"][0]["message"].get("content", "")
-            return {"reply": (final or "Listo.").strip(), "actions": actions}
+                # Native models can keep looping with tools; text-mode models get one clean
+                # prose pass without tools to stop them repeating raw JSON.
+                send_tools = is_native
+
+            # Out of rounds — force a final answer without tools.
+            final = (await _complete(client, with_tools=False)).get("content", "") or ""
+            if _parse_text_tool_calls(final) or not final.strip():
+                final = _fallback_reply(actions)
+            return {"reply": final.strip(), "actions": actions}
 
     except httpx.HTTPStatusError as exc:
         raise HTTPException(status_code=502, detail=f"LM Studio respondió con error: {exc.response.status_code}")
