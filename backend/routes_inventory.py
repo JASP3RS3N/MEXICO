@@ -59,6 +59,7 @@ async def create_material(payload: MaterialCreate, user: dict = Depends(require_
         "current_stock": float(payload.current_stock),
         "min_stock": float(payload.min_stock),
         "par_stock": float(payload.par_stock),
+        "min_order": float(payload.min_order),
         "supplier": payload.supplier or "",
         "active": payload.active,
         "created_at": now_iso(),
@@ -133,7 +134,9 @@ async def po_suggestions(user: dict = Depends(require_owner)):
         minimum = float(m.get("min_stock", 0))
         par = float(m.get("par_stock", 0)) or (minimum * 2)
         if current <= minimum:
-            suggested = max(par - current, 0)
+            moq = float(m.get("min_order", 0))
+            suggested = max(par - current, 0) or (par or minimum or 1)
+            suggested = max(suggested, moq)  # never below the minimum order quantity
             suggestions.append(
                 {
                     "material_id": m["id"],
@@ -142,7 +145,8 @@ async def po_suggestions(user: dict = Depends(require_owner)):
                     "supplier": m.get("supplier", ""),
                     "current_stock": current,
                     "min_stock": minimum,
-                    "suggested_qty": round(suggested, 2) or round(par or minimum or 1, 2),
+                    "min_order": moq,
+                    "suggested_qty": round(suggested, 2),
                     "unit_cost": float(m.get("cost_per_unit", 0)),
                 }
             )

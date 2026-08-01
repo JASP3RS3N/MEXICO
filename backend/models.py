@@ -54,6 +54,10 @@ class ProductCreate(BaseModel):
     station: str = "cocina"  # kitchen station where it is prepared
     active: bool = True
     recipe: List[RecipeItem] = Field(default_factory=list)
+    # Optional finished-goods stock tracking (for items sold as-is).
+    track_stock: bool = False
+    current_stock: float = 0.0
+    min_stock: float = 0.0
 
 
 class ProductUpdate(BaseModel):
@@ -64,6 +68,9 @@ class ProductUpdate(BaseModel):
     station: Optional[str] = None
     active: Optional[bool] = None
     recipe: Optional[List[RecipeItem]] = None
+    track_stock: Optional[bool] = None
+    current_stock: Optional[float] = None
+    min_stock: Optional[float] = None
 
 
 class PriceUpdate(BaseModel):
@@ -82,6 +89,7 @@ class MaterialCreate(BaseModel):
     current_stock: float = 0.0
     min_stock: float = 0.0
     par_stock: float = 0.0  # target stock level used for reorder suggestions
+    min_order: float = 0.0  # minimum order quantity (MOQ) per purchase
     supplier: Optional[str] = ""
     active: bool = True
 
@@ -95,6 +103,7 @@ class MaterialUpdate(BaseModel):
     current_stock: Optional[float] = None
     min_stock: Optional[float] = None
     par_stock: Optional[float] = None
+    min_order: Optional[float] = None
     supplier: Optional[str] = None
     active: Optional[bool] = None
 

@@ -4,7 +4,7 @@ Used by the cashier pay endpoint and the bank-terminal webhook so both paths
 behave identically (inventory deduction, COGS, low-stock alerts).
 """
 from config import db, gen_id, now_iso
-from alerts import maybe_low_stock_alert
+from alerts import maybe_low_stock_alert, maybe_low_stock_alert_product
 
 
 async def settle_order(order: dict, method: str, amount_received, actor: dict):
@@ -39,6 +39,15 @@ async def settle_order(order: dict, method: str, amount_received, actor: dict):
             )
             await maybe_low_stock_alert(r["material_id"])
         cogs += float(item.get("unit_cost", 0) or 0) * qty
+
+        # Finished-goods stock (products sold as-is with track_stock).
+        prod = await db.products.find_one({"id": item["product_id"]})
+        if prod and prod.get("track_stock"):
+            await db.products.update_one(
+                {"id": item["product_id"]},
+                {"$set": {"current_stock": float(prod.get("current_stock", 0)) - qty}},
+            )
+            await maybe_low_stock_alert_product(item["product_id"])
 
     amount = amount_received if amount_received is not None else order["total"]
     change = round(max(float(amount) - float(order["total"]), 0), 2)

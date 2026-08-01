@@ -7,7 +7,7 @@ import { Btn, Card, Input, Select, Field, Modal, EmptyState, PageLoader, Toggle,
 import { money, num } from "@/lib/format";
 
 const UNITS = ["kg", "g", "lt", "ml", "pza", "caja", "paquete", "bolsa"];
-const emptyMat = { sku: "", name: "", unit: "kg", category: "General", cost_per_unit: "", current_stock: "", min_stock: "", par_stock: "", supplier: "", active: true };
+const emptyMat = { sku: "", name: "", unit: "kg", category: "General", cost_per_unit: "", current_stock: "", min_stock: "", par_stock: "", min_order: "", supplier: "", active: true };
 
 export default function Inventory() {
   const [materials, setMaterials] = useState([]);
@@ -53,6 +53,7 @@ export default function Inventory() {
       current_stock: Number(modal.current_stock || 0),
       min_stock: Number(modal.min_stock || 0),
       par_stock: Number(modal.par_stock || 0),
+      min_order: Number(modal.min_order || 0),
     };
     try {
       if (modal.id) await api.put(`/materials/${modal.id}`, body);
@@ -146,7 +147,7 @@ export default function Inventory() {
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1 justify-end">
                         <button onClick={() => setAdjust({ material: m, qty: "", reason: "" })} title="Ajustar stock" className="text-textDim hover:text-cyan p-1.5"><PackageMinus className="h-4 w-4" /></button>
-                        <button onClick={() => setModal({ ...emptyMat, ...m, cost_per_unit: String(m.cost_per_unit), current_stock: String(m.current_stock), min_stock: String(m.min_stock), par_stock: String(m.par_stock) })} className="text-textDim hover:text-amber-400 p-1.5"><Pencil className="h-4 w-4" /></button>
+                        <button onClick={() => setModal({ ...emptyMat, ...m, cost_per_unit: String(m.cost_per_unit), current_stock: String(m.current_stock), min_stock: String(m.min_stock), par_stock: String(m.par_stock), min_order: String(m.min_order ?? "") })} className="text-textDim hover:text-amber-400 p-1.5"><Pencil className="h-4 w-4" /></button>
                         <button onClick={() => remove(m.id)} className="text-textDim hover:text-red-400 p-1.5"><Trash2 className="h-4 w-4" /></button>
                       </div>
                     </td>
@@ -180,6 +181,7 @@ export default function Inventory() {
             <Field label="Existencia actual" hint={modal.id ? "Usa 'ajustar' para movimientos" : undefined}><Input type="number" step="0.001" value={modal.current_stock} onChange={(e) => setModal({ ...modal, current_stock: e.target.value })} /></Field>
             <Field label="Stock mínimo (alerta)"><Input type="number" step="0.001" value={modal.min_stock} onChange={(e) => setModal({ ...modal, min_stock: e.target.value })} /></Field>
             <Field label="Stock par (objetivo)"><Input type="number" step="0.001" value={modal.par_stock} onChange={(e) => setModal({ ...modal, par_stock: e.target.value })} /></Field>
+            <Field label="Mínimo de compra (MOQ)" hint="Cantidad mínima al generar una orden de compra"><Input type="number" step="0.001" value={modal.min_order} onChange={(e) => setModal({ ...modal, min_order: e.target.value })} /></Field>
             <Field label="Proveedor"><Input value={modal.supplier} onChange={(e) => setModal({ ...modal, supplier: e.target.value })} /></Field>
             <div className="sm:col-span-2"><Toggle checked={modal.active} onChange={(v) => setModal({ ...modal, active: v })} label="Activo" /></div>
           </div>

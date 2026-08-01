@@ -324,3 +324,40 @@ async def generate_recipe_suggestions(user: dict = Depends(require_owner)):
     doc = {"id": "recipe_suggestions", "month": now().strftime("%Y-%m"), "content": content.strip(), "created_at": now_iso()}
     await db.ai_suggestions.update_one({"id": "recipe_suggestions"}, {"$set": doc}, upsert=True)
     return {"current_month": doc["month"], "suggestion": {k: v for k, v in doc.items() if k != "_id"}}
+
+
+# ---------------------------------------------------------------------------
+# Sale price suggestions (on-demand, owner)
+# ---------------------------------------------------------------------------
+PRICE_SYSTEM = (
+    "Eres analista de precios de un restaurante smokehouse. Sugieres precios de venta "
+    "rentables (food cost objetivo ~25-35%) sin alejarte demasiado del precio actual, en español."
+)
+
+
+@router.post("/ai/price-suggestions")
+async def price_suggestions(user: dict = Depends(require_owner)):
+    if not AI_ENABLED:
+        raise HTTPException(status_code=503, detail="La IA está deshabilitada.")
+    products = await db.products.find({"active": True}, {"_id": 0}).to_list(2000)
+    if not products:
+        raise HTTPException(status_code=400, detail="No hay productos para analizar.")
+
+    lines = [
+        f"- {p['name']}: precio actual {p.get('price', 0)}, costo estimado {p.get('cost', 0)}"
+        for p in products
+    ]
+    prompt = (
+        "Productos del menú (precio actual y costo estimado):\n" + "\n".join(lines) +
+        "\n\nSugiere un precio de venta óptimo para cada producto buscando un food cost sano "
+        "(aprox 25-35%) y buen margen, sin alejarte demasiado del precio actual. Para cada uno indica: "
+        "nombre, precio actual, precio sugerido y una razón breve (1 línea). Responde en español, en lista."
+    )
+    messages = [{"role": "system", "content": PRICE_SYSTEM}, {"role": "user", "content": prompt}]
+    try:
+        content = await _plain_completion(messages, temperature=0.4)
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(status_code=502, detail=f"LM Studio respondió con error: {exc.response.status_code}")
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=503, detail=f"No se pudo conectar a LM Studio ({LMSTUDIO_BASE_URL}). Detalle: {exc}")
+    return {"content": content.strip()}

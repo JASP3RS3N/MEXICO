@@ -85,6 +85,9 @@ async def create_product(payload: ProductCreate, user: dict = Depends(require_ow
         "active": payload.active,
         "recipe": recipe,
         "cost": await _product_cost(recipe),
+        "track_stock": payload.track_stock,
+        "current_stock": float(payload.current_stock),
+        "min_stock": float(payload.min_stock),
         "created_at": now_iso(),
     }
     await db.products.insert_one(doc)
@@ -99,9 +102,12 @@ async def update_product(product_id: str, payload: ProductUpdate, user: dict = D
 
     updates = {}
     data = payload.model_dump(exclude_unset=True)
-    for field in ("name", "category_id", "description", "station", "active"):
+    for field in ("name", "category_id", "description", "station", "active", "track_stock"):
         if field in data and data[field] is not None:
             updates[field] = data[field]
+    for field in ("current_stock", "min_stock"):
+        if field in data and data[field] is not None:
+            updates[field] = float(data[field])
     if "price" in data and data["price"] is not None:
         updates["price"] = round(float(data["price"]), 2)
     if "recipe" in data and data["recipe"] is not None:

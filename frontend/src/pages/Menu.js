@@ -1,13 +1,13 @@
 import React, { useEffect, useState } from "react";
-import { Plus, Pencil, Trash2, UtensilsCrossed, Tag, Check, X, Layers } from "lucide-react";
+import { Plus, Pencil, Trash2, UtensilsCrossed, Tag, Check, X, Layers, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/lib/api";
 import { PageHeader } from "@/components/Layout";
-import { Btn, Card, Input, Select, Field, Modal, Badge, EmptyState, PageLoader, Toggle } from "@/components/kit";
+import { Btn, Card, Input, Select, Field, Modal, Badge, EmptyState, PageLoader, Toggle, Spinner } from "@/components/kit";
 import { money, pct } from "@/lib/format";
 
 const STATIONS = ["cocina", "ahumador", "parrilla", "barra", "postres"];
-const emptyProduct = { name: "", category_id: "", price: "", description: "", station: "cocina", active: true, recipe: [] };
+const emptyProduct = { name: "", category_id: "", price: "", description: "", station: "cocina", active: true, recipe: [], track_stock: false, current_stock: "", min_stock: "" };
 
 export default function Menu() {
   const [products, setProducts] = useState([]);
@@ -20,6 +20,24 @@ export default function Menu() {
   const [saving, setSaving] = useState(false);
   const [catModal, setCatModal] = useState(false);
   const [priceEdit, setPriceEdit] = useState({ id: null, value: "" });
+  const [priceModal, setPriceModal] = useState(false);
+  const [priceSug, setPriceSug] = useState(null);
+  const [priceLoading, setPriceLoading] = useState(false);
+
+  const genPrices = async () => {
+    setPriceLoading(true);
+    setPriceSug(null);
+    setPriceModal(true);
+    try {
+      const { data } = await api.post("/ai/price-suggestions");
+      setPriceSug(data.content);
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || "No se pudo (¿LM Studio encendido?)");
+      setPriceModal(false);
+    } finally {
+      setPriceLoading(false);
+    }
+  };
 
   const load = async () => {
     try {
@@ -57,6 +75,9 @@ export default function Menu() {
       station: modal.station,
       active: modal.active,
       recipe: modal.recipe.filter((r) => r.material_id && r.qty).map((r) => ({ material_id: r.material_id, qty: Number(r.qty) })),
+      track_stock: modal.track_stock,
+      current_stock: Number(modal.current_stock || 0),
+      min_stock: Number(modal.min_stock || 0),
     };
     try {
       if (modal.id) await api.put(`/products/${modal.id}`, body);
@@ -104,6 +125,9 @@ export default function Menu() {
         subtitle="Crea productos, ajusta precios y define recetas (materia prima)"
         actions={
           <>
+            <Btn variant="secondary" onClick={genPrices}>
+              <Sparkles className="h-4 w-4" /> Sugerir precios (IA)
+            </Btn>
             <Btn variant="secondary" onClick={() => setCatModal(true)}>
               <Layers className="h-4 w-4" /> Categorías
             </Btn>
@@ -178,7 +202,7 @@ export default function Menu() {
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-1 justify-end">
-                          <button onClick={() => setModal({ ...emptyProduct, ...p, price: String(p.price), recipe: (p.recipe || []).map((r) => ({ ...r, qty: String(r.qty) })) })} className="text-textDim hover:text-amber-400 p-1.5">
+                          <button onClick={() => setModal({ ...emptyProduct, ...p, price: String(p.price), current_stock: String(p.current_stock ?? ""), min_stock: String(p.min_stock ?? ""), recipe: (p.recipe || []).map((r) => ({ ...r, qty: String(r.qty) })) })} className="text-textDim hover:text-amber-400 p-1.5">
                             <Pencil className="h-4 w-4" />
                           </button>
                           <button onClick={() => removeProduct(p.id)} className="text-textDim hover:text-red-400 p-1.5">
@@ -248,11 +272,36 @@ export default function Menu() {
             </div>
 
             <Toggle checked={modal.active} onChange={(v) => setModal({ ...modal, active: v })} label="Producto activo (visible en el menú)" />
+
+            <div className="border-t border-border pt-4">
+              <Toggle checked={modal.track_stock} onChange={(v) => setModal({ ...modal, track_stock: v })} label="Llevar inventario de este producto (venta directa)" />
+              <p className="text-xs text-textDim mt-1">Para productos terminados que se venden tal cual (bebidas, postres). Descuenta stock al vender y avisa al llegar al mínimo.</p>
+              {modal.track_stock && (
+                <div className="grid grid-cols-2 gap-4 mt-3">
+                  <Field label="Existencia actual"><Input type="number" step="0.001" value={modal.current_stock} onChange={(e) => setModal({ ...modal, current_stock: e.target.value })} /></Field>
+                  <Field label="Mínimo (alerta)"><Input type="number" step="0.001" value={modal.min_stock} onChange={(e) => setModal({ ...modal, min_stock: e.target.value })} /></Field>
+                </div>
+              )}
+            </div>
           </div>
         )}
       </Modal>
 
       <CategoriesModal open={catModal} onClose={() => setCatModal(false)} categories={categories} reload={load} />
+
+      <Modal
+        open={priceModal}
+        onClose={() => setPriceModal(false)}
+        title="Sugerencias de precios (IA)"
+        size="lg"
+        footer={<Btn variant="ghost" onClick={() => setPriceModal(false)}>Cerrar</Btn>}
+      >
+        {priceLoading ? (
+          <div className="flex items-center gap-2 text-textDim py-10 justify-center"><Spinner /> Analizando costos y márgenes…</div>
+        ) : (
+          <div className="text-sm text-textMain whitespace-pre-wrap max-h-[60vh] overflow-y-auto">{priceSug}</div>
+        )}
+      </Modal>
     </div>
   );
 }

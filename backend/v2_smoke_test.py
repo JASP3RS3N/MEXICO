@@ -65,6 +65,31 @@ with client:
     if alerts:
         check("resolve alert", client.post(f"/api/alerts/{alerts[0]['id']}/resolve", headers=owner).status_code == 200)
 
+    print("\n== Cashier cannot see sales ==")
+    # Owner creates and pays an order; cashier must not see it.
+    op = client.post("/api/orders", headers=cashier, json={"items": [{"product_id": products[0]["id"], "qty": 1}]}).json()
+    client.post(f"/api/orders/{op['id']}/pay", headers=cashier, json={"method": "efectivo"})
+    cashier_orders = client.get("/api/orders", headers=cashier).json()
+    check("cashier list has no paid orders", all(not o["paid"] for o in cashier_orders))
+    check("cashier can't fetch a paid order (403)", client.get(f"/api/orders/{op['id']}", headers=cashier).status_code == 403)
+    check("owner still sees the paid order", client.get(f"/api/orders/{op['id']}", headers=owner).json()["paid"] is True)
+
+    print("\n== MOQ suggestions + product stock alert ==")
+    lowm = materials[1]
+    client.put(f"/api/materials/{lowm['id']}", headers=owner, json={"current_stock": 0, "min_stock": 5, "par_stock": 6, "min_order": 20})
+    sug = client.get("/api/purchase-orders/suggestions", headers=owner).json()
+    msug = next((s for s in sug if s["material_id"] == lowm["id"]), None)
+    check("suggestion respects MOQ (>=20)", msug and msug["suggested_qty"] >= 20)
+
+    # product with finished-goods stock
+    pr = client.post("/api/products", headers=owner, json={"name": "Cerveza artesanal", "price": 60, "track_stock": True, "current_stock": 1, "min_stock": 2}).json()
+    o3 = client.post("/api/orders", headers=cashier, json={"items": [{"product_id": pr["id"], "qty": 1}]}).json()
+    client.post(f"/api/orders/{o3['id']}/pay", headers=cashier, json={"method": "efectivo"})
+    prod_after = client.get("/api/products", headers=owner).json()
+    pr_after = next(p for p in prod_after if p["id"] == pr["id"])
+    check("product stock decremented on sale", pr_after["current_stock"] == 0)
+    check("product low-stock alert generated", any(a.get("ref_id") == pr["id"] for a in client.get("/api/alerts", headers=owner).json()))
+
     print("\n== Bank terminal webhook ==")
     order2 = client.post("/api/orders", headers=cashier, json={"items": [{"product_id": products[0]["id"], "qty": 1}]}).json()
     check("wrong secret rejected", client.post("/api/payments/terminal", json={"secret": "bad", "amount": order2["total"], "order_number": order2["order_number"]}).status_code == 401)

@@ -138,6 +138,10 @@ async def list_orders(
         query["status"] = {"$in": ACTIVE_STATUSES}
     if paid is not None:
         query["paid"] = paid
+    # Cashiers only take orders and charge: they never see completed sales.
+    if user["role"] == "cashier":
+        query["paid"] = False
+        query["status"] = {"$in": [ORDER_PENDING, ORDER_PREPARING, ORDER_READY, ORDER_DELIVERED]}
     orders = await db.orders.find(query, {"_id": 0}).sort("created_at", -1).to_list(limit)
     # Cashiers/prep don't need cost/recipe internals in the payload.
     if user["role"] != "owner":
@@ -153,6 +157,8 @@ async def get_order(order_id: str, user: dict = Depends(get_current_user)):
     order = await db.orders.find_one({"id": order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Orden no encontrada")
+    if user["role"] == "cashier" and order.get("paid"):
+        raise HTTPException(status_code=403, detail="No disponible")
     return order
 
 

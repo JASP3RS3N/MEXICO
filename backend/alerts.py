@@ -58,3 +58,40 @@ async def maybe_low_stock_alert(material_id: str):
     await db.alerts.insert_one(alert)
     await _fire_webhook(alert)
     logger.info("Alerta de bajo stock: %s", mat["name"])
+
+
+async def maybe_low_stock_alert_product(product_id: str):
+    """Low-stock alert for a finished-goods product (track_stock enabled)."""
+    prod = await db.products.find_one({"id": product_id}, {"_id": 0})
+    if not prod or not prod.get("track_stock"):
+        return
+    current = float(prod.get("current_stock", 0))
+    minimum = float(prod.get("min_stock", 0))
+    if current > minimum:
+        await db.alerts.update_many(
+            {"ref_id": product_id, "type": "low_stock_product", "resolved": False},
+            {"$set": {"resolved": True, "resolved_at": now_iso()}},
+        )
+        return
+    if await db.alerts.find_one({"ref_id": product_id, "type": "low_stock_product", "resolved": False}):
+        return
+    alert = {
+        "id": gen_id(),
+        "type": "low_stock_product",
+        "ref_type": "product",
+        "ref_id": product_id,
+        "material_id": product_id,  # UI key compatibility
+        "name": f"{prod['name']} (producto)",
+        "unit": "u",
+        "current_stock": current,
+        "min_stock": minimum,
+        "suggested_qty": 0,
+        "supplier": "",
+        "level": "critical" if current <= 0 else "warning",
+        "message": f"{prod['name']} (producto terminado) en {current} unidades (mínimo {minimum}).",
+        "resolved": False,
+        "created_at": now_iso(),
+    }
+    await db.alerts.insert_one(alert)
+    await _fire_webhook(alert)
+    logger.info("Alerta de bajo stock (producto): %s", prod["name"])

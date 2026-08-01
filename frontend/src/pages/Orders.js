@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import { Receipt, CreditCard, XCircle, Package, Banknote, ArrowRightLeft } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/lib/api";
+import { useAuth } from "@/context/AuthContext";
 import { PageHeader } from "@/components/Layout";
 import { Btn, Badge, Modal, Field, Input, EmptyState, PageLoader } from "@/components/kit";
 import { money, fmtTime } from "@/lib/format";
@@ -23,6 +24,11 @@ const FILTERS = [
   { key: "cancelled", label: "Canceladas" },
   { key: "all", label: "Todas" },
 ];
+// Cashiers only take orders and charge — no access to completed sales.
+const CASHIER_FILTERS = [
+  { key: "active", label: "Por cobrar" },
+  { key: "ready", label: "Listas" },
+];
 
 const METHODS = [
   { key: "efectivo", label: "Efectivo", icon: Banknote },
@@ -31,6 +37,9 @@ const METHODS = [
 ];
 
 export default function Orders() {
+  const { user } = useAuth();
+  const isCashier = user?.role === "cashier";
+  const filters = isCashier ? CASHIER_FILTERS : FILTERS;
   const [filter, setFilter] = useState("active");
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -106,10 +115,10 @@ export default function Orders() {
 
   return (
     <div>
-      <PageHeader title="Órdenes" subtitle="Cobra, entrega o cancela comandas" />
+      <PageHeader title="Órdenes" subtitle={isCashier ? "Cobra y entrega las comandas pendientes" : "Cobra, entrega o cancela comandas"} />
 
       <div className="flex gap-2 overflow-x-auto pb-2 mb-4">
-        {FILTERS.map((f) => (
+        {filters.map((f) => (
           <button
             key={f.key}
             onClick={() => setFilter(f.key)}
