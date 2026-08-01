@@ -17,6 +17,7 @@ from config import (
 )
 from models import OrderCreate, PaymentRequest
 from security import get_current_user, require_roles
+from orders_service import settle_order
 
 router = APIRouter()
 
@@ -239,48 +240,5 @@ async def pay_order(order_id: str, payload: PaymentRequest, user: dict = Depends
     if order["status"] == ORDER_CANCELLED:
         raise HTTPException(status_code=400, detail="La orden está cancelada")
 
-    # Deduct raw materials for each sold product and compute realized COGS.
-    cogs = 0.0
-    for item in order.get("items", []):
-        for r in item.get("recipe", []):
-            consumed = float(r.get("qty", 0)) * int(item["qty"])
-            if consumed:
-                mat = await db.materials.find_one({"id": r["material_id"]})
-                if mat:
-                    new_stock = float(mat.get("current_stock", 0)) - consumed
-                    await db.materials.update_one(
-                        {"id": r["material_id"]},
-                        {"$set": {"current_stock": new_stock, "updated_at": now_iso()}},
-                    )
-                    await db.inventory_movements.insert_one(
-                        {
-                            "id": gen_id(),
-                            "material_id": r["material_id"],
-                            "type": "consumption",
-                            "qty": -consumed,
-                            "reference": f"Orden #{order['order_number']}",
-                            "user_id": user["id"],
-                            "created_at": now_iso(),
-                        }
-                    )
-        cogs += float(item.get("unit_cost", 0) or 0) * int(item["qty"])
-
-    amount_received = payload.amount_received if payload.amount_received is not None else order["total"]
-    change = round(max(float(amount_received) - float(order["total"]), 0), 2)
-
-    updates = {
-        "paid": True,
-        "status": ORDER_PAID,
-        "payment_method": payload.method,
-        "amount_received": float(amount_received),
-        "change": change,
-        "cogs": round(cogs, 2),
-        "paid_at": now_iso(),
-        "cashier_id": user["id"],
-        "cashier_name": user.get("name", ""),
-    }
-    if not order.get("delivered_at"):
-        updates["delivered_at"] = now_iso()
-    await db.orders.update_one({"id": order_id}, {"$set": updates})
-    fresh = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    fresh, change = await settle_order(order, payload.method, payload.amount_received, user)
     return {"order": fresh, "change": change}

@@ -103,3 +103,32 @@ Ejemplos:
 - Que esté activado **“Serve on Local Network”**.
 - Si es por Tailscale, que ambas máquinas estén conectadas y la `LMSTUDIO_BASE_URL` tenga la IP correcta.
 - Para apagar la IA por completo: en `docker-compose.yml` pon `AI_ENABLED: "false"`.
+
+---
+
+# 💳 Terminal bancaria y 🔔 alertas
+
+## Cobros con terminal (detección automática)
+El efectivo lo confirma la **cajera** en el POS (no necesita nada más). Para **detectar cobros con tarjeta**,
+la app expone un webhook: tu terminal/procesador (Clip, Mercado Pago) o un flujo de **n8n** le avisa a la app
+cuando entra un cobro y la orden se marca pagada sola.
+
+- **URL:** `POST http://localhost:8001/api/payments/terminal`
+- **Cuerpo (JSON):** `{"secret":"<tu-secreto>","amount":189.00,"order_number":12,"reference":"TXN-123"}`
+- El `secret` es el de `PAYMENTS_WEBHOOK_SECRET` en `docker-compose.yml` (¡cámbialo!).
+- Si mandas `order_number`, concilia esa orden; si no, busca la orden sin pagar cuyo total coincida con `amount`.
+
+> Clip y Mercado Pago Point tienen webhooks propios: apúntalos a esta URL (directo o vía n8n para traducir el formato).
+> Si usas una terminal de banco sin API, un flujo de n8n o la conciliación manual en **Órdenes** cubren el caso.
+
+## Alertas de bajo stock
+Cuando un insumo llega a su mínimo (al venderse por su **receta/BOM**), se genera una **alerta en la app**
+(campanita 🔔 en el menú y sección **Alertas**), y la IA también te la reporta. **No requiere n8n.**
+
+- ¿Quieres además **WhatsApp/Telegram/correo**? Pon la URL de tu flujo n8n en `ALERT_WEBHOOK_URL`
+  (en `docker-compose.yml`). La app le hará `POST` con los datos de la alerta y n8n la reenvía a donde quieras.
+
+## Otras novedades v2 (ya en la app, sin configurar)
+- **Proveedores** y **Empleados** (altas/bajas con historial) en el menú lateral (dueño).
+- **Colores** editables en **Ajustes** (fondo, barra lateral, letras).
+- La **IA** puede dar de alta proveedores e insumos, definir recetas (BOM), fijar precios/costos y hacer **cortes de caja**.

@@ -181,6 +181,95 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_supplier",
+            "description": "Da de alta un proveedor.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "phone": {"type": "string"},
+                    "email": {"type": "string"},
+                    "contact": {"type": "string"},
+                    "notes": {"type": "string"},
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "upsert_material",
+            "description": "Crea o actualiza una materia prima (insumo): costo, existencia, mínimo, unidad, proveedor. Si ya existe por nombre, la actualiza.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "unit": {"type": "string", "description": "kg, lt, pza, etc."},
+                    "cost_per_unit": {"type": "number"},
+                    "current_stock": {"type": "number"},
+                    "min_stock": {"type": "number"},
+                    "par_stock": {"type": "number"},
+                    "supplier": {"type": "string"},
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "set_product_bom",
+            "description": "Define la receta / BOM de un producto: qué insumos y cuánto consume cada venta (para descuento de inventario y costeo).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "product": {"type": "string"},
+                    "items": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {"material": {"type": "string"}, "qty": {"type": "number"}},
+                            "required": ["material", "qty"],
+                        },
+                    },
+                },
+                "required": ["product", "items"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_product",
+            "description": "Crea un producto del menú.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "price": {"type": "number"},
+                    "category": {"type": "string", "description": "Nombre de la categoría (opcional)."},
+                    "station": {"type": "string", "description": "cocina, ahumador, barra…"},
+                    "description": {"type": "string"},
+                },
+                "required": ["name", "price"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_cash_cut",
+            "description": "Corte financiero del periodo: venta total, desglose por método de pago, EFECTIVO ESPERADO en caja, gastos y utilidad. Úsalo para el corte de caja / del día.",
+            "parameters": {
+                "type": "object",
+                "properties": {"period": {"type": "string", "enum": ["today", "yesterday", "week", "month"]}},
+            },
+        },
+    },
 ]
 
 
@@ -385,6 +474,108 @@ async def execute_tool(name: str, args: dict, user: dict):
         return (
             {"producto": product["name"], "precio_anterior": old, "precio_nuevo": new_price},
             f"Cambió el precio de «{product['name']}» de {_money(old, cur)} a {_money(new_price, cur)}",
+        )
+
+    if name == "create_supplier":
+        doc = {
+            "id": gen_id(), "name": (args.get("name") or "").strip(),
+            "contact": args.get("contact", ""), "phone": args.get("phone", ""),
+            "email": args.get("email", ""), "notes": args.get("notes", ""),
+            "active": True, "created_at": now_iso(),
+        }
+        if not doc["name"]:
+            return ({"error": "Falta el nombre del proveedor"}, None)
+        await db.suppliers.insert_one(doc)
+        return ({"supplier": doc["name"], "id": doc["id"]}, f"Dio de alta al proveedor «{doc['name']}»")
+
+    if name == "upsert_material":
+        mat = await _find_material(args.get("name", ""))
+        fields = {}
+        for k in ("unit", "supplier"):
+            if args.get(k) is not None:
+                fields[k] = args[k]
+        for k in ("cost_per_unit", "current_stock", "min_stock", "par_stock"):
+            if args.get(k) is not None:
+                fields[k] = float(args[k])
+        if mat:
+            fields["updated_at"] = now_iso()
+            await db.materials.update_one({"id": mat["id"]}, {"$set": fields})
+            return ({"insumo": mat["name"], "actualizado": True, **fields}, f"Actualizó la materia prima «{mat['name']}»")
+        doc = {
+            "id": gen_id(), "sku": "", "name": (args.get("name") or "").strip(),
+            "unit": args.get("unit", "kg") or "kg", "category": "General",
+            "cost_per_unit": float(args.get("cost_per_unit", 0) or 0),
+            "current_stock": float(args.get("current_stock", 0) or 0),
+            "min_stock": float(args.get("min_stock", 0) or 0),
+            "par_stock": float(args.get("par_stock", 0) or 0),
+            "supplier": args.get("supplier", ""), "active": True,
+            "created_at": now_iso(), "updated_at": now_iso(),
+        }
+        if not doc["name"]:
+            return ({"error": "Falta el nombre del insumo"}, None)
+        await db.materials.insert_one(doc)
+        return ({"insumo": doc["name"], "creado": True}, f"Dio de alta la materia prima «{doc['name']}»")
+
+    if name == "set_product_bom":
+        product = await _find_product(args.get("product", ""))
+        if not product:
+            return ({"error": f"No encontré el producto: {args.get('product')}"}, None)
+        recipe, cost, missing = [], 0.0, []
+        for it in args.get("items", []):
+            mat = await _find_material(it.get("material", ""))
+            if not mat:
+                missing.append(it.get("material"))
+                continue
+            qty = float(it.get("qty", 0))
+            recipe.append({"material_id": mat["id"], "qty": qty})
+            cost += float(mat.get("cost_per_unit", 0)) * qty
+        if not recipe:
+            return ({"error": f"No encontré estos insumos: {missing}"}, None)
+        await db.products.update_one({"id": product["id"]}, {"$set": {"recipe": recipe, "cost": round(cost, 2)}})
+        result = {"producto": product["name"], "insumos": len(recipe), "costo_estimado": round(cost, 2)}
+        if missing:
+            result["no_encontrados"] = missing
+        return (result, f"Definió la receta (BOM) de «{product['name']}» con {len(recipe)} insumos")
+
+    if name == "create_product":
+        cat_id = None
+        if args.get("category"):
+            cat = await db.categories.find_one({"name": {"$regex": f"^{args['category']}$", "$options": "i"}}, {"_id": 0})
+            cat_id = cat["id"] if cat else None
+        doc = {
+            "id": gen_id(), "name": (args.get("name") or "").strip(),
+            "category_id": cat_id, "price": round(float(args.get("price", 0) or 0), 2),
+            "description": args.get("description", ""), "station": args.get("station", "cocina") or "cocina",
+            "active": True, "recipe": [], "cost": 0, "created_at": now_iso(),
+        }
+        if not doc["name"]:
+            return ({"error": "Falta el nombre del producto"}, None)
+        await db.products.insert_one(doc)
+        return ({"producto": doc["name"], "precio": doc["price"]}, f"Creó el producto «{doc['name']}» a {_money(doc['price'], cur)}")
+
+    if name == "get_cash_cut":
+        start, end = _period_range(args.get("period", "today"))
+        orders = await _paid_orders(start, end)
+        by_method = {}
+        for o in orders:
+            mth = o.get("payment_method", "efectivo") or "efectivo"
+            by_method[mth] = round(by_method.get(mth, 0) + float(o.get("total", 0)), 2)
+        expenses = await db.expenses.find({"date": {"$gte": start[:10], "$lte": end[:10]}}, {"_id": 0}).to_list(5000)
+        opex = round(sum(float(e["amount"]) for e in expenses), 2)
+        agg = _aggregate(orders)
+        return (
+            {
+                "period": args.get("period", "today"),
+                "venta_total": agg["gross_sales"],
+                "ordenes": agg["orders"],
+                "por_metodo_pago": by_method,
+                "efectivo_esperado_en_caja": by_method.get("efectivo", 0),
+                "gastos": opex,
+                "utilidad_neta_aprox": round(agg["net_sales"] - agg["cogs"] - opex, 2),
+                "moneda": cur,
+                "nota": "Efectivo esperado = suma de órdenes pagadas en efectivo. Compáralo con el conteo físico de caja.",
+            },
+            None,
         )
 
     return ({"error": f"Herramienta desconocida: {name}"}, None)

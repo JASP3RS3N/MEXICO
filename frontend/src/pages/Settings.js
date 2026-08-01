@@ -1,13 +1,16 @@
 import React, { useEffect, useState } from "react";
-import { Save, Settings as SettingsIcon, Monitor } from "lucide-react";
+import { Save, Settings as SettingsIcon, Monitor, Palette, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/lib/api";
+import { useTheme } from "@/context/ThemeContext";
 import { PageHeader } from "@/components/Layout";
 import { Btn, Card, CardHead, Input, Select, Field, Toggle, PageLoader } from "@/components/kit";
 
 const CURRENCIES = ["MXN", "USD", "EUR", "COP", "ARS", "CLP", "PEN"];
+const THEME_DEFAULTS = { theme_bg: "#080c14", theme_sidebar: "#0d1420", theme_text: "#b8c5d3" };
 
 export default function SettingsPage() {
+  const { applyTheme } = useTheme();
   const [settings, setSettings] = useState(null);
   const [saving, setSaving] = useState(false);
 
@@ -18,6 +21,19 @@ export default function SettingsPage() {
       .catch(() => toast.error("No se pudo cargar la configuración"));
   }, []);
 
+  // Live preview of theme changes.
+  const setColor = (key, value) => {
+    const next = { ...settings, [key]: value };
+    setSettings(next);
+    applyTheme?.(next);
+  };
+
+  const resetColors = () => {
+    const next = { ...settings, theme_bg: "", theme_sidebar: "", theme_text: "" };
+    setSettings(next);
+    applyTheme?.(next);
+  };
+
   const save = async () => {
     setSaving(true);
     try {
@@ -26,7 +42,11 @@ export default function SettingsPage() {
         currency: settings.currency,
         tax_rate: Number(settings.tax_rate),
         tax_included: settings.tax_included,
+        theme_bg: settings.theme_bg || "",
+        theme_sidebar: settings.theme_sidebar || "",
+        theme_text: settings.theme_text || "",
       });
+      applyTheme?.(settings);
       toast.success("Configuración guardada");
     } catch {
       toast.error("No se pudo guardar");
@@ -84,6 +104,22 @@ export default function SettingsPage() {
       </Card>
 
       <Card className="mt-6">
+        <CardHead
+          title="Colores (tema)"
+          subtitle="Personaliza los colores de la app"
+          action={<Btn size="sm" variant="ghost" onClick={resetColors}><RotateCcw className="h-3.5 w-3.5" /> Restablecer</Btn>}
+        />
+        <div className="p-5 grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <ColorField label="Fondo" value={settings.theme_bg || THEME_DEFAULTS.theme_bg} onChange={(v) => setColor("theme_bg", v)} />
+          <ColorField label="Barra lateral" value={settings.theme_sidebar || THEME_DEFAULTS.theme_sidebar} onChange={(v) => setColor("theme_sidebar", v)} />
+          <ColorField label="Letras" value={settings.theme_text || THEME_DEFAULTS.theme_text} onChange={(v) => setColor("theme_text", v)} />
+          <p className="sm:col-span-3 text-xs text-textDim flex items-center gap-1.5">
+            <Palette className="h-3.5 w-3.5" /> Los cambios se ven al instante. Presiona “Guardar cambios” arriba para conservarlos.
+          </p>
+        </div>
+      </Card>
+
+      <Card className="mt-6">
         <CardHead title="Pantalla de cliente" subtitle="Tablero público con el estado de las comandas" />
         <div className="p-5">
           <p className="text-sm text-textMain mb-4">
@@ -100,5 +136,21 @@ export default function SettingsPage() {
         <SettingsIcon className="h-3.5 w-3.5" /> Smokehouse OS · v1.0
       </div>
     </div>
+  );
+}
+
+function ColorField({ label, value, onChange }) {
+  return (
+    <Field label={label}>
+      <div className="flex items-center gap-2">
+        <input
+          type="color"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          className="h-10 w-14 rounded-lg border border-border bg-surface2 cursor-pointer p-1"
+        />
+        <Input value={value} onChange={(e) => onChange(e.target.value)} className="font-mono" />
+      </div>
+    </Field>
   );
 }

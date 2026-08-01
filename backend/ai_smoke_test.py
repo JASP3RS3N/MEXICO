@@ -95,6 +95,29 @@ with client:  # startup seeds data
     res, _ = run("create_order", {"items": [{"product": "NoExiste ABC", "qty": 1}]})
     check("unknown product handled gracefully", "error" in res)
 
+    print("\n== Tool executor (new v2 write tools) ==")
+    res, summary = run("create_supplier", {"name": "Distribuidora IA", "phone": "555-1234"})
+    check("create_supplier ok", bool(res.get("id")) and bool(summary))
+    sup = loop.run_until_complete(db.suppliers.find_one({"name": "Distribuidora IA"}, {"_id": 0}))
+    check("supplier persisted", sup is not None)
+
+    res, _ = run("upsert_material", {"name": "Queso gouda", "unit": "kg", "cost_per_unit": 180, "current_stock": 5, "min_stock": 2})
+    check("upsert_material creates", res.get("creado") is True)
+    res, _ = run("upsert_material", {"name": "Queso gouda", "cost_per_unit": 195})
+    check("upsert_material updates existing", res.get("actualizado") is True)
+    mat = loop.run_until_complete(db.materials.find_one({"name": "Queso gouda"}, {"_id": 0}))
+    check("material cost updated", mat and mat["cost_per_unit"] == 195)
+
+    res, _ = run("create_product", {"name": "Sandwich de la casa", "price": 120, "station": "cocina"})
+    check("create_product ok", res.get("precio") == 120)
+    res, _ = run("set_product_bom", {"product": "Sandwich de la casa", "items": [{"material": "Queso gouda", "qty": 0.1}]})
+    check("set_product_bom ok", res.get("insumos") == 1)
+    prod = loop.run_until_complete(db.products.find_one({"name": "Sandwich de la casa"}, {"_id": 0}))
+    check("BOM persisted with cost", prod and len(prod["recipe"]) == 1 and prod["cost"] > 0)
+
+    res, _ = run("get_cash_cut", {"period": "today"})
+    check("cash cut has expected-cash field", "efectivo_esperado_en_caja" in res)
+
 print("\n== Text-emitted tool-call parser (Qwen/coder compat) ==")
 from routes_ai import _parse_text_tool_calls  # noqa: E402
 

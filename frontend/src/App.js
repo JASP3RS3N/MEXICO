@@ -2,6 +2,7 @@ import React from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { Toaster } from "sonner";
 import { AuthProvider, useAuth, HOME_BY_ROLE } from "@/context/AuthContext";
+import { ThemeProvider } from "@/context/ThemeContext";
 import Layout from "@/components/Layout";
 import { PageLoader } from "@/components/kit";
 
@@ -18,6 +19,9 @@ import Expenses from "@/pages/Expenses";
 import Users from "@/pages/Users";
 import SettingsPage from "@/pages/Settings";
 import Assistant from "@/pages/Assistant";
+import Suppliers from "@/pages/Suppliers";
+import Employees from "@/pages/Employees";
+import Alerts from "@/pages/Alerts";
 
 function RoleHome() {
   const { user } = useAuth();
@@ -42,6 +46,7 @@ function LoginRoute() {
 export default function App() {
   return (
     <AuthProvider>
+      <ThemeProvider>
       <BrowserRouter>
         <Routes>
           <Route path="/login" element={<LoginRoute />} />
@@ -56,6 +61,9 @@ export default function App() {
           <Route path="/cocina" element={<Protected roles={["owner", "prep"]}><Kitchen /></Protected>} />
           <Route path="/menu" element={<Protected roles={["owner"]}><Menu /></Protected>} />
           <Route path="/inventario" element={<Protected roles={["owner"]}><Inventory /></Protected>} />
+          <Route path="/proveedores" element={<Protected roles={["owner"]}><Suppliers /></Protected>} />
+          <Route path="/empleados" element={<Protected roles={["owner"]}><Employees /></Protected>} />
+          <Route path="/alertas" element={<Protected roles={["owner"]}><Alerts /></Protected>} />
           <Route path="/compras" element={<Protected roles={["owner"]}><PurchaseOrders /></Protected>} />
           <Route path="/gastos" element={<Protected roles={["owner"]}><Expenses /></Protected>} />
           <Route path="/usuarios" element={<Protected roles={["owner"]}><Users /></Protected>} />
@@ -65,6 +73,7 @@ export default function App() {
         </Routes>
       </BrowserRouter>
       <Toaster theme="dark" richColors position="top-right" />
+      </ThemeProvider>
     </AuthProvider>
   );
 }

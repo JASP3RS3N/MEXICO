@@ -165,3 +165,67 @@ class SettingsUpdate(BaseModel):
     currency: Optional[str] = None
     tax_rate: Optional[float] = None  # e.g. 0.16 for 16% IVA
     tax_included: Optional[bool] = None  # whether prices already include tax
+    # Theme colors (hex, e.g. "#080c14"); empty/None = default palette.
+    theme_bg: Optional[str] = None
+    theme_sidebar: Optional[str] = None
+    theme_text: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# Suppliers (proveedores)
+# ---------------------------------------------------------------------------
+class SupplierCreate(BaseModel):
+    name: str
+    contact: Optional[str] = ""
+    phone: Optional[str] = ""
+    email: Optional[str] = ""
+    notes: Optional[str] = ""
+    active: bool = True
+
+
+class SupplierUpdate(BaseModel):
+    name: Optional[str] = None
+    contact: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    notes: Optional[str] = None
+    active: Optional[bool] = None
+
+
+# ---------------------------------------------------------------------------
+# Employees (control de empleados, altas/bajas con historial)
+# ---------------------------------------------------------------------------
+class EmployeeCreate(BaseModel):
+    name: str
+    position: Optional[str] = ""  # puesto: cajera, cocina, mesero…
+    phone: Optional[str] = ""
+    email: Optional[str] = ""
+    hire_date: Optional[str] = None  # ISO date; defaults to today
+    wage: Optional[float] = 0.0
+    notes: Optional[str] = ""
+
+
+class EmployeeUpdate(BaseModel):
+    name: Optional[str] = None
+    position: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    wage: Optional[float] = None
+    notes: Optional[str] = None
+
+
+class EmployeeTerminate(BaseModel):
+    termination_date: Optional[str] = None  # defaults to today
+    reason: Optional[str] = ""
+
+
+# ---------------------------------------------------------------------------
+# Bank terminal payment webhook
+# ---------------------------------------------------------------------------
+class TerminalPayment(BaseModel):
+    secret: str
+    amount: float
+    order_number: Optional[int] = None  # match a specific order; else newest unpaid by amount
+    reference: Optional[str] = ""       # provider transaction reference
+    external_id: Optional[str] = ""
+    method: Optional[str] = "tarjeta"
