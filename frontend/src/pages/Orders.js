@@ -17,7 +17,7 @@ export const STATUS_META = {
 
 const FILTERS = [
   { key: "active", label: "Activas" },
-  { key: "pending", label: "Pendientes" },
+  { key: "unpaid", label: "Por cobrar" },
   { key: "ready", label: "Listas" },
   { key: "paid", label: "Pagadas" },
   { key: "cancelled", label: "Canceladas" },
@@ -43,7 +43,12 @@ export default function Orders() {
 
   const load = useCallback(async () => {
     try {
-      const params = filter === "active" ? { active: true } : filter === "all" ? {} : { status: filter };
+      const params =
+        filter === "active" ? { active: true }
+        : filter === "all" ? {}
+        : filter === "paid" ? { paid: true }
+        : filter === "unpaid" ? { paid: false }
+        : { status: filter };
       const { data } = await api.get("/orders", { params });
       setOrders(data);
     } catch {
@@ -129,9 +134,12 @@ export default function Orders() {
             const meta = STATUS_META[o.status] || { label: o.status, color: "gray" };
             return (
               <div key={o.id} className="bg-surface border border-border rounded-2xl p-4">
-                <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center justify-between mb-2 gap-2">
                   <span className="text-lg font-black font-mono text-textBright">#{o.order_number}</span>
-                  <Badge color={meta.color}>{meta.label}</Badge>
+                  <div className="flex items-center gap-1.5 flex-wrap justify-end">
+                    <Badge color={meta.color}>{meta.label}</Badge>
+                    {o.status !== "cancelled" && (o.paid ? <Badge color="green">Pagada</Badge> : <Badge color="amber">Por cobrar</Badge>)}
+                  </div>
                 </div>
                 <div className="text-sm text-textDim space-y-0.5 mb-3">
                   {o.customer_name && <p className="text-textMain">{o.customer_name}</p>}
@@ -153,7 +161,7 @@ export default function Orders() {
                   ))}
                 </ul>
                 <div className="flex items-center justify-between border-t border-border pt-3">
-                  <span className="font-bold font-mono text-cyan">{money(o.total, currency)}</span>
+                  <span className="font-bold font-mono text-money">{money(o.total, currency)}</span>
                   <div className="flex gap-2">
                     {o.status === "ready" && (
                       <Btn size="sm" variant="secondary" onClick={() => action(o.id, "deliver")}>
@@ -196,7 +204,7 @@ export default function Orders() {
         <div className="space-y-4">
           <div className="text-center py-2">
             <p className="text-textDim text-sm">Total a cobrar</p>
-            <p className="text-4xl font-black font-mono text-cyan">{money(payOrder?.total || 0, currency)}</p>
+            <p className="text-4xl font-black font-mono text-money">{money(payOrder?.total || 0, currency)}</p>
           </div>
           <div className="grid grid-cols-3 gap-2">
             {METHODS.map((m) => (
@@ -220,7 +228,7 @@ export default function Orders() {
               {received !== "" && (
                 <div className="flex justify-between mt-2 text-sm">
                   <span className="text-textMain">Cambio</span>
-                  <span className={`font-mono font-bold ${change >= 0 ? "text-cyan" : "text-red-400"}`}>{money(change, currency)}</span>
+                  <span className={`font-mono font-bold ${change >= 0 ? "text-money" : "text-red-400"}`}>{money(change, currency)}</span>
                 </div>
               )}
             </Field>

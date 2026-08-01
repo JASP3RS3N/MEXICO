@@ -140,8 +140,8 @@ export default function Inventory() {
                       {isLow(m) && <AlertTriangle className="inline h-3.5 w-3.5 text-red-400 ml-1" />}
                     </td>
                     <td className="px-4 py-3 text-right font-mono text-textDim">{num(m.min_stock, 0)} / {num(m.par_stock, 0)}</td>
-                    <td className="px-4 py-3 text-right font-mono text-textMain">{money(m.cost_per_unit, currency)}</td>
-                    <td className="px-4 py-3 text-right font-mono text-textMain">{money(Number(m.current_stock) * Number(m.cost_per_unit), currency)}</td>
+                    <td className="px-4 py-3 text-right font-mono text-money">{money(m.cost_per_unit, currency)}</td>
+                    <td className="px-4 py-3 text-right font-mono text-money">{money(Number(m.current_stock) * Number(m.cost_per_unit), currency)}</td>
                     <td className="px-4 py-3 text-textMain truncate max-w-[140px]">{m.supplier || "—"}</td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1 justify-end">

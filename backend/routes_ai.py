@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from ai_tools import TOOLS, execute_tool
+from config import db, now, now_iso
 from security import require_owner
 
 logger = logging.getLogger("smokehouse.ai")
@@ -260,3 +261,64 @@ async def ai_chat(payload: ChatRequest, user: dict = Depends(require_owner)):
         raise HTTPException(status_code=502, detail=f"LM Studio respondió con error: {exc.response.status_code}")
     except httpx.RequestError as exc:
         raise HTTPException(status_code=503, detail=f"No se pudo conectar a LM Studio ({LMSTUDIO_BASE_URL}). Verifica que esté encendido y accesible por Tailscale. Detalle: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# Recipe suggestions from current ingredients (monthly + on-demand)
+# ---------------------------------------------------------------------------
+RECIPE_SYSTEM = (
+    "Eres el chef asesor de un restaurante smokehouse. Propones recetas/platillos "
+    "aprovechando la materia prima disponible, en español, prácticos y rentables."
+)
+
+
+async def _plain_completion(messages, temperature=0.6):
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+        model = await _resolve_model(client)
+        headers = {"Authorization": f"Bearer {LMSTUDIO_API_KEY}", "Content-Type": "application/json"}
+        resp = await client.post(
+            f"{LMSTUDIO_BASE_URL}/chat/completions",
+            headers=headers,
+            json={"model": model, "messages": messages, "temperature": temperature},
+        )
+        resp.raise_for_status()
+        return resp.json()["choices"][0]["message"].get("content", "") or ""
+
+
+@router.get("/ai/recipe-suggestions")
+async def get_recipe_suggestions(user: dict = Depends(require_owner)):
+    doc = await db.ai_suggestions.find_one({"id": "recipe_suggestions"}, {"_id": 0})
+    return {"current_month": now().strftime("%Y-%m"), "suggestion": doc}
+
+
+@router.post("/ai/recipe-suggestions")
+async def generate_recipe_suggestions(user: dict = Depends(require_owner)):
+    if not AI_ENABLED:
+        raise HTTPException(status_code=503, detail="La IA está deshabilitada.")
+    materials = await db.materials.find({"active": True}, {"_id": 0}).sort("name", 1).to_list(2000)
+    if not materials:
+        raise HTTPException(status_code=400, detail="No hay materia prima registrada para sugerir recetas.")
+
+    lines = [
+        f"- {m['name']}: {m.get('current_stock', 0)} {m.get('unit', '')} en existencia, "
+        f"costo {m.get('cost_per_unit', 0)}/{m.get('unit', 'u')}"
+        for m in materials
+    ]
+    prompt = (
+        "Insumos disponibles en el inventario:\n" + "\n".join(lines) +
+        "\n\nPropón 5 platillos/recetas que se puedan preparar principalmente con estos insumos "
+        "para un smokehouse. Para cada uno incluye: nombre, ingredientes usados (del inventario), "
+        "preparación breve, costo estimado por porción y precio de venta sugerido con buen margen. "
+        "Responde en español, en lista clara y accionable."
+    )
+    messages = [{"role": "system", "content": RECIPE_SYSTEM}, {"role": "user", "content": prompt}]
+    try:
+        content = await _plain_completion(messages)
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(status_code=502, detail=f"LM Studio respondió con error: {exc.response.status_code}")
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=503, detail=f"No se pudo conectar a LM Studio ({LMSTUDIO_BASE_URL}). Detalle: {exc}")
+
+    doc = {"id": "recipe_suggestions", "month": now().strftime("%Y-%m"), "content": content.strip(), "created_at": now_iso()}
+    await db.ai_suggestions.update_one({"id": "recipe_suggestions"}, {"$set": doc}, upsert=True)
+    return {"current_month": doc["month"], "suggestion": {k: v for k, v in doc.items() if k != "_id"}}

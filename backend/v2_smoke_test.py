@@ -74,6 +74,16 @@ with client:
     check("order marked paid by terminal (tarjeta)", paid["paid"] is True and paid["payment_method"] == "tarjeta")
     check("terminal reference stored", paid.get("terminal_reference") == "TXN-1")
 
+    print("\n== Patch: paid order stays in kitchen ==")
+    o = client.post("/api/orders", headers=cashier, json={"items": [{"product_id": products[0]["id"], "qty": 1}]}).json()
+    # Pay immediately, before the kitchen accepts it.
+    client.post(f"/api/orders/{o['id']}/pay", headers=cashier, json={"method": "efectivo"})
+    fresh = client.get(f"/api/orders/{o['id']}", headers=owner).json()
+    check("paid order keeps fulfillment status (pending)", fresh["paid"] is True and fresh["status"] == "pending")
+    check("paid order still visible in kitchen", any(k["order_number"] == o["order_number"] for k in client.get("/api/kitchen", headers=owner).json()))
+    check("paid order counted in finance", client.get("/api/finance/pnl", headers=owner).json()["orders"] >= 1)
+    check("filter Por cobrar excludes paid", all(x["order_number"] != o["order_number"] for x in client.get("/api/orders", headers=cashier, params={"paid": False}).json()))
+
     print("\n== Theme settings ==")
     r = client.put("/api/settings", headers=owner, json={"theme_bg": "#101020", "theme_sidebar": "#161628", "theme_text": "#e0e0ff"})
     check("owner saves theme colors", r.json().get("theme_bg") == "#101020")

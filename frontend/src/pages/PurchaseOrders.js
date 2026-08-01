@@ -151,7 +151,7 @@ export default function PurchaseOrders() {
                       {po.supplier || "Sin proveedor"} · {po.items.length} insumo(s) · {fmtDate(po.created_at)}
                     </p>
                   </div>
-                  <span className="font-mono font-bold text-cyan">{money(po.total, currency)}</span>
+                  <span className="font-mono font-bold text-money">{money(po.total, currency)}</span>
                 </div>
 
                 {isOpen && (
@@ -230,7 +230,7 @@ export default function PurchaseOrders() {
             <Field label="Notas"><Textarea value={modal.notes} onChange={(e) => setModal({ ...modal, notes: e.target.value })} /></Field>
             <div className="flex justify-between border-t border-border pt-3">
               <span className="text-textMain">Total estimado</span>
-              <span className="font-mono font-bold text-cyan">{money(modalTotal, currency)}</span>
+              <span className="font-mono font-bold text-money">{money(modalTotal, currency)}</span>
             </div>
           </div>
         )}

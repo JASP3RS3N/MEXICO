@@ -169,6 +169,12 @@ class SettingsUpdate(BaseModel):
     theme_bg: Optional[str] = None
     theme_sidebar: Optional[str] = None
     theme_text: Optional[str] = None
+    theme_money: Optional[str] = None  # color for monetary/cost figures
+    # Client display (/pantalla) colors.
+    display_bg: Optional[str] = None
+    display_text: Optional[str] = None
+    display_prep: Optional[str] = None   # "en preparación" accent
+    display_ready: Optional[str] = None  # "listo" accent
 
 
 # ---------------------------------------------------------------------------

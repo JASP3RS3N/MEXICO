@@ -17,7 +17,8 @@ def _month_start_iso() -> str:
 
 
 async def _paid_orders(start: str, end: str):
-    query = {"paid": True, "status": ORDER_PAID, "paid_at": {"$gte": start, "$lte": end}}
+    # Paid is independent from fulfillment status; filter on the paid flag + paid_at.
+    query = {"paid": True, "paid_at": {"$gte": start, "$lte": end}}
     return await db.orders.find(query, {"_id": 0}).to_list(20000)
 
 

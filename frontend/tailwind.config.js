@@ -17,6 +17,7 @@ module.exports = {
         textMain: "rgb(var(--c-textmain) / <alpha-value>)",
         textDim: "rgb(var(--c-textdim) / <alpha-value>)",
         textBright: "rgb(var(--c-textbright) / <alpha-value>)",
+        money: "rgb(var(--c-money) / <alpha-value>)",
         // Accents stay fixed.
         cyan: {
           DEFAULT: "#00e5a0",

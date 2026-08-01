@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Bot, Send, Sparkles, CheckCircle2, AlertTriangle, User, Wrench } from "lucide-react";
+import { Bot, Send, Sparkles, CheckCircle2, AlertTriangle, User, Wrench, ChefHat, RefreshCw, ChevronDown, ChevronUp } from "lucide-react";
+import { toast } from "sonner";
 import api from "@/lib/api";
 import { PageHeader } from "@/components/Layout";
 import { Btn, Card, Badge, Spinner } from "@/components/kit";
@@ -18,9 +19,44 @@ export default function Assistant() {
   const [loading, setLoading] = useState(false);
   const scrollRef = useRef(null);
 
+  // Recipe suggestions (monthly + on-demand)
+  const [suggestion, setSuggestion] = useState(null);
+  const [currentMonth, setCurrentMonth] = useState("");
+  const [sugLoading, setSugLoading] = useState(false);
+  const [sugOpen, setSugOpen] = useState(false);
+  const autoTried = useRef(false);
+
   useEffect(() => {
     api.get("/ai/status").then(({ data }) => setStatus(data)).catch(() => setStatus({ enabled: false, connected: false, detail: "No disponible" }));
   }, []);
+
+  const genSuggestions = async () => {
+    setSugLoading(true);
+    try {
+      const { data } = await api.post("/ai/recipe-suggestions");
+      setSuggestion(data.suggestion);
+      setCurrentMonth(data.current_month);
+      setSugOpen(true);
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || "No se pudieron generar sugerencias");
+    } finally {
+      setSugLoading(false);
+    }
+  };
+
+  // Load stored suggestions; auto-generate once at the start of a new month.
+  useEffect(() => {
+    if (!status?.connected || autoTried.current) return;
+    autoTried.current = true;
+    api.get("/ai/recipe-suggestions").then(({ data }) => {
+      setSuggestion(data.suggestion);
+      setCurrentMonth(data.current_month);
+      if (!data.suggestion || data.suggestion.month !== data.current_month) {
+        genSuggestions();
+      }
+    }).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
@@ -78,6 +114,35 @@ export default function Assistant() {
               </ol>
             </div>
           </div>
+        </Card>
+      )}
+
+      {connected && (
+        <Card className="mb-4">
+          <div className="flex items-center gap-3 p-4">
+            <div className="h-9 w-9 rounded-xl bg-amber-500/15 text-amber-400 flex items-center justify-center shrink-0">
+              <ChefHat className="h-5 w-5" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-textBright font-semibold text-sm">Recetas sugeridas del mes</p>
+              <p className="text-textDim text-xs">
+                {suggestion ? `Generadas para ${suggestion.month}` : "La IA propone platillos con tus ingredientes"}
+              </p>
+            </div>
+            <Btn size="sm" variant="secondary" onClick={genSuggestions} loading={sugLoading}>
+              <RefreshCw className="h-3.5 w-3.5" /> {suggestion ? "Actualizar" : "Generar"}
+            </Btn>
+            {suggestion && (
+              <button onClick={() => setSugOpen((v) => !v)} className="text-textDim hover:text-textBright p-1.5">
+                {sugOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+              </button>
+            )}
+          </div>
+          {suggestion && sugOpen && (
+            <div className="px-4 pb-4 border-t border-border pt-3">
+              <div className="text-sm text-textMain whitespace-pre-wrap max-h-72 overflow-y-auto">{suggestion.content}</div>
+            </div>
+          )}
         </Card>
       )}
 

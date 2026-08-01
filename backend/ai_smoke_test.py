@@ -56,6 +56,11 @@ with client:  # startup seeds data
     r = client.post("/api/ai/chat", headers=owner_headers, json={"messages": [{"role": "user", "content": "hola"}]})
     check("chat returns 503 when LM Studio down", r.status_code == 503)
 
+    rs = client.get("/api/ai/recipe-suggestions", headers=owner_headers).json()
+    check("recipe-suggestions GET returns current_month", "current_month" in rs and rs["suggestion"] is None)
+    check("recipe-suggestions POST 503 when LM Studio down", client.post("/api/ai/recipe-suggestions", headers=owner_headers).status_code == 503)
+    check("recipe-suggestions owner-only", client.get("/api/ai/recipe-suggestions", headers=cashier_headers).status_code == 403)
+
     print("\n== Tool executor (read) ==")
     loop = asyncio.get_event_loop()
 

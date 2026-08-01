@@ -17,7 +17,7 @@ const triplet = (rgb) => `${rgb[0]} ${rgb[1]} ${rgb[2]}`;
 const mix = (a, b, t) => a.map((v, i) => Math.round(v + (b[i] - v) * t));
 const lighten = (rgb, t) => mix(rgb, [255, 255, 255], t);
 
-const VARS = ["--c-bg", "--c-surface", "--c-surface2", "--c-surface3", "--c-sidebar", "--c-border", "--c-borderhover", "--c-textmain", "--c-textbright", "--c-textdim"];
+const VARS = ["--c-bg", "--c-surface", "--c-surface2", "--c-surface3", "--c-sidebar", "--c-border", "--c-borderhover", "--c-textmain", "--c-textbright", "--c-textdim", "--c-money"];
 
 export function ThemeProvider({ children }) {
   const { user } = useAuth();
@@ -31,6 +31,8 @@ export function ThemeProvider({ children }) {
     const bg = hexToRgb(settings.theme_bg);
     const sidebar = hexToRgb(settings.theme_sidebar);
     const text = hexToRgb(settings.theme_text);
+    const money = hexToRgb(settings.theme_money);
+    if (money) root.style.setProperty("--c-money", triplet(money));
 
     if (bg) {
       root.style.setProperty("--c-bg", triplet(bg));

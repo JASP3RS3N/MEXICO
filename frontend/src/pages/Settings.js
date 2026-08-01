@@ -7,7 +7,10 @@ import { PageHeader } from "@/components/Layout";
 import { Btn, Card, CardHead, Input, Select, Field, Toggle, PageLoader } from "@/components/kit";
 
 const CURRENCIES = ["MXN", "USD", "EUR", "COP", "ARS", "CLP", "PEN"];
-const THEME_DEFAULTS = { theme_bg: "#080c14", theme_sidebar: "#0d1420", theme_text: "#b8c5d3" };
+const THEME_DEFAULTS = {
+  theme_bg: "#080c14", theme_sidebar: "#0d1420", theme_text: "#b8c5d3", theme_money: "#00e5a0",
+  display_bg: "#080c14", display_text: "#e8edf2", display_prep: "#f59e0b", display_ready: "#00e5a0",
+};
 
 export default function SettingsPage() {
   const { applyTheme } = useTheme();
@@ -29,7 +32,7 @@ export default function SettingsPage() {
   };
 
   const resetColors = () => {
-    const next = { ...settings, theme_bg: "", theme_sidebar: "", theme_text: "" };
+    const next = { ...settings, theme_bg: "", theme_sidebar: "", theme_text: "", theme_money: "" };
     setSettings(next);
     applyTheme?.(next);
   };
@@ -45,6 +48,11 @@ export default function SettingsPage() {
         theme_bg: settings.theme_bg || "",
         theme_sidebar: settings.theme_sidebar || "",
         theme_text: settings.theme_text || "",
+        theme_money: settings.theme_money || "",
+        display_bg: settings.display_bg || "",
+        display_text: settings.display_text || "",
+        display_prep: settings.display_prep || "",
+        display_ready: settings.display_ready || "",
       });
       applyTheme?.(settings);
       toast.success("Configuración guardada");
@@ -113,8 +121,22 @@ export default function SettingsPage() {
           <ColorField label="Fondo" value={settings.theme_bg || THEME_DEFAULTS.theme_bg} onChange={(v) => setColor("theme_bg", v)} />
           <ColorField label="Barra lateral" value={settings.theme_sidebar || THEME_DEFAULTS.theme_sidebar} onChange={(v) => setColor("theme_sidebar", v)} />
           <ColorField label="Letras" value={settings.theme_text || THEME_DEFAULTS.theme_text} onChange={(v) => setColor("theme_text", v)} />
+          <ColorField label="Cifras / dinero" value={settings.theme_money || THEME_DEFAULTS.theme_money} onChange={(v) => setColor("theme_money", v)} />
           <p className="sm:col-span-3 text-xs text-textDim flex items-center gap-1.5">
             <Palette className="h-3.5 w-3.5" /> Los cambios se ven al instante. Presiona “Guardar cambios” arriba para conservarlos.
+          </p>
+        </div>
+      </Card>
+
+      <Card className="mt-6">
+        <CardHead title="Colores de la pantalla de cliente" subtitle="Los colores del tablero público (/pantalla)" />
+        <div className="p-5 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <ColorField label="Fondo" value={settings.display_bg || THEME_DEFAULTS.display_bg} onChange={(v) => setColor("display_bg", v)} />
+          <ColorField label="Letras" value={settings.display_text || THEME_DEFAULTS.display_text} onChange={(v) => setColor("display_text", v)} />
+          <ColorField label="En preparación" value={settings.display_prep || THEME_DEFAULTS.display_prep} onChange={(v) => setColor("display_prep", v)} />
+          <ColorField label="Listo" value={settings.display_ready || THEME_DEFAULTS.display_ready} onChange={(v) => setColor("display_ready", v)} />
+          <p className="sm:col-span-2 lg:col-span-4 text-xs text-textDim">
+            Guarda los cambios y abre la <a href="/pantalla" target="_blank" rel="noreferrer" className="text-money underline">pantalla de cliente</a> para verlos (se actualiza sola cada minuto).
           </p>
         </div>
       </Card>

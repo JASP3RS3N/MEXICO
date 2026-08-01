@@ -24,6 +24,7 @@ function OrderCard({ order, onAction, busy }) {
         <div className="flex items-center gap-2">
           <span className="text-xl font-black font-mono text-textBright">#{order.order_number}</span>
           {order.order_type === "para_llevar" && <Badge color="purple">Para llevar</Badge>}
+          {order.paid && <Badge color="green">Pagada</Badge>}
         </div>
         <div
           className={`flex items-center gap-1 text-sm font-mono ${

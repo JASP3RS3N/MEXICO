@@ -15,6 +15,7 @@
     --c-textmain: 184 197 211;
     --c-textbright: 232 237 242;
     --c-textdim: 90 109 130;
+    --c-money: 0 229 160;
   }
   html {
     scroll-behavior: smooth;

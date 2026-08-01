@@ -143,7 +143,7 @@ export default function Menu() {
                       </td>
                       <td className="px-4 py-3 text-textMain">{catName(p.category_id)}</td>
                       <td className="px-4 py-3"><Badge color="gray">{p.station}</Badge></td>
-                      <td className="px-4 py-3 text-right font-mono text-textDim">{money(p.cost, currency)}</td>
+                      <td className="px-4 py-3 text-right font-mono text-money">{money(p.cost, currency)}</td>
                       <td className="px-4 py-3 text-right">
                         {priceEdit.id === p.id ? (
                           <div className="flex items-center gap-1 justify-end">
@@ -155,13 +155,13 @@ export default function Menu() {
                               className="h-8 w-24 text-right"
                               onKeyDown={(e) => e.key === "Enter" && savePrice(p.id)}
                             />
-                            <button onClick={() => savePrice(p.id)} className="text-cyan p-1"><Check className="h-4 w-4" /></button>
+                            <button onClick={() => savePrice(p.id)} className="text-money p-1"><Check className="h-4 w-4" /></button>
                             <button onClick={() => setPriceEdit({ id: null, value: "" })} className="text-textDim p-1"><X className="h-4 w-4" /></button>
                           </div>
                         ) : (
                           <button
                             onClick={() => setPriceEdit({ id: p.id, value: String(p.price) })}
-                            className="font-mono text-cyan hover:underline inline-flex items-center gap-1"
+                            className="font-mono text-money hover:underline inline-flex items-center gap-1"
                             title="Editar precio"
                           >
                             <Tag className="h-3 w-3" /> {money(p.price, currency)}
@@ -169,7 +169,7 @@ export default function Menu() {
                         )}
                       </td>
                       <td className="px-4 py-3 text-right font-mono">
-                        <span className={margin >= 60 ? "text-cyan" : margin >= 30 ? "text-amber-400" : "text-red-400"}>
+                        <span className={margin >= 60 ? "text-money" : margin >= 30 ? "text-amber-400" : "text-red-400"}>
                           {pct(margin)}
                         </span>
                       </td>

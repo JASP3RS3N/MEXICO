@@ -127,6 +127,7 @@ async def create_order(payload: OrderCreate, user: dict = Depends(require_roles(
 async def list_orders(
     status: str = Query(None),
     active: bool = Query(False),
+    paid: bool = Query(None),
     limit: int = Query(100),
     user: dict = Depends(get_current_user),
 ):
@@ -135,6 +136,8 @@ async def list_orders(
         query["status"] = status
     elif active:
         query["status"] = {"$in": ACTIVE_STATUSES}
+    if paid is not None:
+        query["paid"] = paid
     orders = await db.orders.find(query, {"_id": 0}).sort("created_at", -1).to_list(limit)
     # Cashiers/prep don't need cost/recipe internals in the payload.
     if user["role"] != "owner":
@@ -168,6 +171,19 @@ async def kitchen_queue(user: dict = Depends(require_roles("prep", "owner", "cas
             i.pop("price", None)
             i.pop("line_total", None)
     return orders
+
+
+@router.get("/display/theme")
+async def display_theme():
+    """Public: colors + name for the client display screen (no auth, no prices)."""
+    s = await db.settings.find_one({"id": "settings"}, {"_id": 0}) or {}
+    return {
+        "restaurant_name": s.get("restaurant_name", "Smokehouse"),
+        "display_bg": s.get("display_bg", ""),
+        "display_text": s.get("display_text", ""),
+        "display_prep": s.get("display_prep", ""),
+        "display_ready": s.get("display_ready", ""),
+    }
 
 
 @router.get("/display")

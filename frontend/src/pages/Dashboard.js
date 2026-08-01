@@ -286,7 +286,7 @@ export default function Dashboard() {
                   <span className="w-6 text-center text-textDim font-mono text-sm">{i + 1}</span>
                   <span className="flex-1 text-textBright text-sm truncate">{p.name}</span>
                   <Badge color="gray">{num(p.qty)} vendidos</Badge>
-                  <span className="w-24 text-right font-mono text-cyan text-sm">{money(p.revenue, currency)}</span>
+                  <span className="w-24 text-right font-mono text-money text-sm">{money(p.revenue, currency)}</span>
                 </div>
               ))}
             </div>
@@ -300,7 +300,7 @@ export default function Dashboard() {
 }
 
 const PnLRow = ({ label, value, strong, sub, accent }) => {
-  const color = accent === "green" ? "text-cyan" : accent === "red" ? "text-red-400" : "text-textBright";
+  const color = accent === "green" ? "text-money" : accent === "red" ? "text-red-400" : "text-textBright";
   return (
     <div className="flex justify-between items-baseline">
       <span className={sub ? "text-textDim text-sm" : "text-textMain text-sm"}>{label}</span>

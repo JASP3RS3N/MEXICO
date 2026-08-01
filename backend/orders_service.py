@@ -3,7 +3,7 @@
 Used by the cashier pay endpoint and the bank-terminal webhook so both paths
 behave identically (inventory deduction, COGS, low-stock alerts).
 """
-from config import ORDER_PAID, db, gen_id, now_iso
+from config import db, gen_id, now_iso
 from alerts import maybe_low_stock_alert
 
 
@@ -43,9 +43,11 @@ async def settle_order(order: dict, method: str, amount_received, actor: dict):
     amount = amount_received if amount_received is not None else order["total"]
     change = round(max(float(amount) - float(order["total"]), 0), 2)
 
+    # NOTE: payment is independent from the kitchen/fulfillment status. We do NOT
+    # move the order to a "paid" status, so a paid order keeps flowing through the
+    # kitchen (pending → preparing → ready → delivered). Payment is the `paid` flag.
     updates = {
         "paid": True,
-        "status": ORDER_PAID,
         "payment_method": method,
         "amount_received": float(amount),
         "change": change,

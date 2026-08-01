@@ -188,7 +188,7 @@ export default function POS() {
                     {p.name}
                   </p>
                   {p.description && <p className="text-xs text-textDim mt-1 line-clamp-1">{p.description}</p>}
-                  <p className="text-cyan font-bold font-mono mt-2">{money(p.price, settings.currency)}</p>
+                  <p className="text-money font-bold font-mono mt-2">{money(p.price, settings.currency)}</p>
                 </button>
               ))}
             </div>
@@ -218,7 +218,7 @@ export default function POS() {
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
                       <p className="text-sm font-medium text-textBright truncate">{i.product.name}</p>
-                      <p className="text-xs text-cyan font-mono">{money(i.product.price, settings.currency)}</p>
+                      <p className="text-xs text-money font-mono">{money(i.product.price, settings.currency)}</p>
                     </div>
                     <button onClick={() => removeItem(i.product.id)} className="text-textDim hover:text-red-400">
                       <Trash2 className="h-4 w-4" />
@@ -284,7 +284,7 @@ export default function POS() {
               {rate > 0 && <Row label={`IVA (${Math.round(rate * 100)}%)`} value={money(totals.tax, settings.currency)} />}
               <div className="flex justify-between pt-1 border-t border-border">
                 <span className="text-textBright font-semibold">Total</span>
-                <span className="text-cyan font-bold font-mono text-lg">{money(totals.total, settings.currency)}</span>
+                <span className="text-money font-bold font-mono text-lg">{money(totals.total, settings.currency)}</span>
               </div>
             </div>
 
@@ -319,7 +319,7 @@ export default function POS() {
         <div className="space-y-4">
           <div className="text-center py-2">
             <p className="text-textDim text-sm">Total a cobrar</p>
-            <p className="text-4xl font-black font-mono text-cyan">
+            <p className="text-4xl font-black font-mono text-money">
               {money(payOrder?.total || 0, settings.currency)}
             </p>
           </div>
@@ -356,7 +356,7 @@ export default function POS() {
               {received !== "" && (
                 <div className="flex justify-between mt-2 text-sm">
                   <span className="text-textMain">Cambio</span>
-                  <span className={`font-mono font-bold ${change >= 0 ? "text-cyan" : "text-red-400"}`}>
+                  <span className={`font-mono font-bold ${change >= 0 ? "text-money" : "text-red-400"}`}>
                     {money(change, settings.currency)}
                   </span>
                 </div>
