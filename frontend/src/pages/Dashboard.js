@@ -178,6 +178,9 @@ export default function Dashboard() {
               <p className="text-xs text-textDim text-right">Margen {pct(pnl?.gross_margin || 0)}</p>
             </div>
             <PnLRow label="(–) Gastos operativos" value={`- ${money(pnl?.operating_expenses, currency)}`} sub />
+            {pnl?.payroll > 0 && (
+              <p className="text-xs text-textDim text-right -mt-1">incluye nómina {money(pnl.payroll, currency)}</p>
+            )}
             <div className="border-t border-border pt-2.5">
               <PnLRow
                 label="Utilidad neta"

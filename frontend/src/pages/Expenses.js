@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Plus, Wallet, Trash2 } from "lucide-react";
+import { Plus, Wallet, Trash2, Users } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/lib/api";
 import { PageHeader } from "@/components/Layout";
@@ -15,15 +15,19 @@ export default function Expenses() {
   const [modal, setModal] = useState(null);
   const [saving, setSaving] = useState(false);
 
+  const [payroll, setPayroll] = useState(0);
+
   const load = async () => {
     try {
       const range = monthRange(new Date());
-      const [e, s] = await Promise.all([
+      const [e, s, emp] = await Promise.all([
         api.get("/expenses", { params: { start: range.start, end: range.end } }),
         api.get("/settings"),
+        api.get("/employees", { params: { status: "active" } }),
       ]);
       setExpenses(e.data);
       if (s.data?.currency) setCurrency(s.data.currency);
+      setPayroll(emp.data.reduce((sum, x) => sum + Number(x.wage || 0), 0));
     } catch {
       toast.error("No se pudo cargar");
     } finally {
@@ -35,7 +39,8 @@ export default function Expenses() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const total = expenses.reduce((s, e) => s + Number(e.amount), 0);
+  const manualTotal = expenses.reduce((s, e) => s + Number(e.amount), 0);
+  const total = manualTotal + payroll;
 
   const openNew = () => setModal({ category: "General", description: "", amount: "", date: todayInput() });
 
@@ -74,10 +79,23 @@ export default function Expenses() {
         actions={<Btn onClick={openNew}><Plus className="h-4 w-4" /> Registrar gasto</Btn>}
       />
 
-      <div className="grid grid-cols-2 gap-4 mb-6">
-        <Stat label="Gasto del mes" value={money(total, currency)} icon={Wallet} accent="red" />
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+        <Stat label="Total del mes" value={money(total, currency)} icon={Wallet} accent="red" />
+        <Stat label="Gastos capturados" value={money(manualTotal, currency)} icon={Wallet} accent="amber" />
+        <Stat label="Nómina (activos)" value={money(payroll, currency)} sub="Auto · desde Empleados" icon={Users} accent="purple" />
         <Stat label="Registros" value={expenses.length} icon={Wallet} accent="blue" />
       </div>
+
+      {payroll > 0 && (
+        <Card className="p-4 mb-4 flex items-center gap-3">
+          <div className="h-9 w-9 rounded-xl bg-purple-500/10 text-purple-400 flex items-center justify-center shrink-0"><Users className="h-5 w-5" /></div>
+          <div className="flex-1 min-w-0">
+            <p className="text-textBright text-sm font-medium">Nómina de personal activo (automática)</p>
+            <p className="text-textDim text-xs">Se calcula con los sueldos del personal activo en Empleados y se suma a los gastos del mes.</p>
+          </div>
+          <span className="font-mono font-bold text-money shrink-0">{money(payroll, currency)}</span>
+        </Card>
+      )}
 
       {expenses.length === 0 ? (
         <EmptyState icon={Wallet} title="Sin gastos este mes" subtitle="Registra renta, nómina, servicios y más." />

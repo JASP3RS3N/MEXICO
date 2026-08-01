@@ -84,6 +84,16 @@ with client:
     check("paid order counted in finance", client.get("/api/finance/pnl", headers=owner).json()["orders"] >= 1)
     check("filter Por cobrar excludes paid", all(x["order_number"] != o["order_number"] for x in client.get("/api/orders", headers=cashier, params={"paid": False}).json()))
 
+    print("\n== Payroll auto-included in expenses/P&L ==")
+    pnl_before = client.get("/api/finance/pnl", headers=owner).json()
+    client.post("/api/employees", headers=owner, json={"name": "Ana Cocinera", "position": "cocina", "wage": 9000})
+    pnl_after = client.get("/api/finance/pnl", headers=owner).json()
+    check("P&L exposes payroll field", "payroll" in pnl_after and "payroll_monthly" in pnl_after)
+    check("active payroll counted (9000 monthly)", pnl_after["payroll_monthly"] >= 9000)
+    check("payroll raises operating expenses", pnl_after["operating_expenses"] > pnl_before["operating_expenses"])
+    dash = client.get("/api/finance/dashboard", headers=owner).json()
+    check("dashboard month includes payroll", dash["month"].get("payroll", 0) >= 9000)
+
     print("\n== Theme settings ==")
     r = client.put("/api/settings", headers=owner, json={"theme_bg": "#101020", "theme_sidebar": "#161628", "theme_text": "#e0e0ff"})
     check("owner saves theme colors", r.json().get("theme_bg") == "#101020")

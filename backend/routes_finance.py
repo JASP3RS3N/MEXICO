@@ -16,6 +16,20 @@ def _month_start_iso() -> str:
     return datetime(n.year, n.month, 1, tzinfo=timezone.utc).isoformat()
 
 
+def _period_days(start: str, end: str) -> int:
+    try:
+        d = (datetime.fromisoformat(end) - datetime.fromisoformat(start)).days + 1
+        return max(1, d)
+    except Exception:  # noqa: BLE001
+        return 30
+
+
+async def _active_payroll() -> float:
+    """Monthly payroll = sum of active employees' wages."""
+    emps = await db.employees.find({"status": "active"}, {"_id": 0}).to_list(5000)
+    return round(sum(float(e.get("wage", 0) or 0) for e in emps), 2)
+
+
 async def _paid_orders(start: str, end: str):
     # Paid is independent from fulfillment status; filter on the paid flag + paid_at.
     query = {"paid": True, "paid_at": {"$gte": start, "$lte": end}}
@@ -62,10 +76,17 @@ async def profit_and_loss(
     expenses = await db.expenses.find(
         {"date": {"$gte": start[:10], "$lte": end[:10]}}, {"_id": 0}
     ).to_list(5000)
-    opex = round(sum(float(e["amount"]) for e in expenses), 2)
+    manual_opex = round(sum(float(e["amount"]) for e in expenses), 2)
     expenses_by_cat = defaultdict(float)
     for e in expenses:
         expenses_by_cat[e.get("category", "General")] += float(e["amount"])
+
+    # Payroll of active staff is auto-included (prorated by period length).
+    payroll_monthly = await _active_payroll()
+    payroll = round(payroll_monthly * _period_days(start, end) / 30, 2)
+    if payroll:
+        expenses_by_cat["Nómina"] += payroll
+    opex = round(manual_opex + payroll, 2)
 
     gross_profit = round(agg["net_sales"] - agg["cogs"], 2)
     net_profit = round(gross_profit - opex, 2)
@@ -108,6 +129,9 @@ async def profit_and_loss(
         "gross_profit": gross_profit,
         "gross_margin": round(gross_profit / agg["net_sales"] * 100, 1) if agg["net_sales"] else 0.0,
         "operating_expenses": opex,
+        "manual_expenses": manual_opex,
+        "payroll": payroll,
+        "payroll_monthly": payroll_monthly,
         "expenses_by_category": [{"category": k, "amount": round(v, 2)} for k, v in expenses_by_cat.items()],
         "net_profit": net_profit,
         "net_margin": round(net_profit / agg["net_sales"] * 100, 1) if agg["net_sales"] else 0.0,
@@ -181,7 +205,9 @@ async def dashboard(user: dict = Depends(require_owner)):
     month_expenses = await db.expenses.find(
         {"date": {"$gte": month_start[:10], "$lte": day_end[:10]}}, {"_id": 0}
     ).to_list(5000)
-    opex = sum(float(e["amount"]) for e in month_expenses)
+    payroll_monthly = await _active_payroll()
+    # Month view carries the full monthly payroll of active staff.
+    opex = sum(float(e["amount"]) for e in month_expenses) + payroll_monthly
     month_gross_profit = month["net_sales"] - month["cogs"]
     month_net_profit = round(month_gross_profit - opex, 2)
 
@@ -200,6 +226,8 @@ async def dashboard(user: dict = Depends(require_owner)):
         "today": today,
         "month": {
             **month,
+            "operating_expenses": round(opex, 2),
+            "payroll": payroll_monthly,
             "net_profit": month_net_profit,
             "net_margin": round(month_net_profit / month["net_sales"] * 100, 1) if month["net_sales"] else 0.0,
         },

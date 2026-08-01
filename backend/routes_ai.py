@@ -35,6 +35,7 @@ KNOWN_TOOLS = {t["function"]["name"] for t in TOOLS}
 WRITE_TOOLS = {
     "create_purchase_order", "create_order", "update_product_price",
     "create_supplier", "upsert_material", "set_product_bom", "create_product",
+    "create_menu_recipe",
 }
 
 
@@ -52,7 +53,8 @@ SYSTEM_PROMPT = (
     "Respondes SIEMPRE en español, claro y conciso, con cifras concretas. "
     "Tienes herramientas para consultar finanzas y ventas, revisar inventario y menú, "
     "crear órdenes de compra, levantar pedidos, ajustar precios, dar de alta proveedores e "
-    "insumos (materia prima con costos), definir recetas (BOM) y hacer cortes de caja. "
+    "insumos (materia prima con costos), definir recetas (BOM), crear platillos nuevos en el "
+    "menú con su receta, y hacer cortes de caja. "
     "Usa las herramientas para obtener datos reales antes de responder; no inventes números. "
     "Cuando el dueño te pida crear una orden de compra, levantar un pedido o cambiar un precio, "
     "hazlo con la herramienta correspondiente y confirma con un resumen de lo realizado. "

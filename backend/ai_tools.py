@@ -8,7 +8,7 @@ data stays consistent. The assistant is owner-only, so tools run with owner righ
 from datetime import datetime, timedelta, timezone
 
 from config import PO_DRAFT, db, gen_id, next_sequence, now, now_iso
-from routes_finance import _aggregate, _category_map, _month_start_iso, _paid_orders
+from routes_finance import _active_payroll, _aggregate, _category_map, _month_start_iso, _paid_orders, _period_days
 from routes_orders import _compute_totals, _get_settings
 
 
@@ -267,6 +267,33 @@ TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {"period": {"type": "string", "enum": ["today", "yesterday", "week", "month"]}},
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_menu_recipe",
+            "description": "Crea un platillo NUEVO en el menú con su receta (BOM) en un solo paso: producto + ingredientes del inventario. Úsalo para agregar recetas nuevas al menú.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "price": {"type": "number"},
+                    "category": {"type": "string", "description": "Nombre de categoría (opcional)."},
+                    "station": {"type": "string", "description": "cocina, ahumador, barra…"},
+                    "description": {"type": "string"},
+                    "ingredients": {
+                        "type": "array",
+                        "description": "Insumos del inventario y cantidad por porción.",
+                        "items": {
+                            "type": "object",
+                            "properties": {"material": {"type": "string"}, "qty": {"type": "number"}},
+                            "required": ["material", "qty"],
+                        },
+                    },
+                },
+                "required": ["name", "price"],
             },
         },
     },
@@ -561,7 +588,9 @@ async def execute_tool(name: str, args: dict, user: dict):
             mth = o.get("payment_method", "efectivo") or "efectivo"
             by_method[mth] = round(by_method.get(mth, 0) + float(o.get("total", 0)), 2)
         expenses = await db.expenses.find({"date": {"$gte": start[:10], "$lte": end[:10]}}, {"_id": 0}).to_list(5000)
-        opex = round(sum(float(e["amount"]) for e in expenses), 2)
+        manual_opex = round(sum(float(e["amount"]) for e in expenses), 2)
+        nomina = round(await _active_payroll() * _period_days(start, end) / 30, 2)
+        opex = round(manual_opex + nomina, 2)
         agg = _aggregate(orders)
         return (
             {
@@ -570,12 +599,43 @@ async def execute_tool(name: str, args: dict, user: dict):
                 "ordenes": agg["orders"],
                 "por_metodo_pago": by_method,
                 "efectivo_esperado_en_caja": by_method.get("efectivo", 0),
-                "gastos": opex,
+                "gastos_capturados": manual_opex,
+                "nomina_personal_activo": nomina,
+                "gastos_totales": opex,
                 "utilidad_neta_aprox": round(agg["net_sales"] - agg["cogs"] - opex, 2),
                 "moneda": cur,
-                "nota": "Efectivo esperado = suma de órdenes pagadas en efectivo. Compáralo con el conteo físico de caja.",
+                "nota": "Efectivo esperado = suma de órdenes pagadas en efectivo. La nómina de personal activo se incluye automáticamente.",
             },
             None,
         )
+
+    if name == "create_menu_recipe":
+        pname = (args.get("name") or "").strip()
+        if not pname:
+            return ({"error": "Falta el nombre del platillo"}, None)
+        cat_id = None
+        if args.get("category"):
+            cat = await db.categories.find_one({"name": {"$regex": f"^{args['category']}$", "$options": "i"}}, {"_id": 0})
+            cat_id = cat["id"] if cat else None
+        recipe, cost, missing = [], 0.0, []
+        for it in args.get("ingredients", []) or []:
+            mat = await _find_material(it.get("material", ""))
+            if not mat:
+                missing.append(it.get("material"))
+                continue
+            qty = float(it.get("qty", 0))
+            recipe.append({"material_id": mat["id"], "qty": qty})
+            cost += float(mat.get("cost_per_unit", 0)) * qty
+        doc = {
+            "id": gen_id(), "name": pname, "category_id": cat_id,
+            "price": round(float(args.get("price", 0) or 0), 2),
+            "description": args.get("description", ""), "station": args.get("station", "cocina") or "cocina",
+            "active": True, "recipe": recipe, "cost": round(cost, 2), "created_at": now_iso(),
+        }
+        await db.products.insert_one(doc)
+        result = {"producto": doc["name"], "precio": doc["price"], "costo_estimado": doc["cost"], "insumos": len(recipe)}
+        if missing:
+            result["no_encontrados"] = missing
+        return (result, f"Creó el platillo «{doc['name']}» en el menú a {_money(doc['price'], cur)} con {len(recipe)} insumos")
 
     return ({"error": f"Herramienta desconocida: {name}"}, None)

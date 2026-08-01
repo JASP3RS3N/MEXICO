@@ -122,6 +122,12 @@ with client:  # startup seeds data
 
     res, _ = run("get_cash_cut", {"period": "today"})
     check("cash cut has expected-cash field", "efectivo_esperado_en_caja" in res)
+    check("cash cut includes payroll field", "nomina_personal_activo" in res)
+
+    res, summary = run("create_menu_recipe", {"name": "Tacos de brisket", "price": 95, "station": "cocina", "ingredients": [{"material": "Brisket", "qty": 0.15}, {"material": "Pan brioche", "qty": 1}]})
+    check("create_menu_recipe creates product", res.get("precio") == 95 and res.get("insumos") == 2)
+    prod = loop.run_until_complete(db.products.find_one({"name": "Tacos de brisket"}, {"_id": 0}))
+    check("menu recipe persisted with BOM + cost", prod and len(prod["recipe"]) == 2 and prod["cost"] > 0)
 
 print("\n== Text-emitted tool-call parser (Qwen/coder compat) ==")
 from routes_ai import _parse_text_tool_calls  # noqa: E402
