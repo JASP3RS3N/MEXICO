@@ -51,7 +51,7 @@ export default function App() {
         <Routes>
           <Route path="/login" element={<LoginRoute />} />
           {/* Public customer-facing status board */}
-          <Route path="/pantalla" element={<Display />} />
+          <Route path="/pantalla/:tenantSlug" element={<Display />} />
 
           <Route path="/" element={<Protected><RoleHome /></Protected>} />
           <Route path="/dashboard" element={<Protected roles={["owner"]}><Dashboard /></Protected>} />

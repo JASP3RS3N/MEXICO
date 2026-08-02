@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { useParams } from "react-router-dom";
 import { Flame, ChefHat, CheckCircle2 } from "lucide-react";
 import api from "@/lib/api";
 
@@ -14,22 +15,25 @@ const rgba = (hex, a) => {
 
 // Public customer-facing status board (no auth, no prices). Meant for a TV.
 export default function Display() {
+  const { tenantSlug } = useParams();
   const [orders, setOrders] = useState([]);
   const [clock, setClock] = useState(new Date());
   const [theme, setTheme] = useState(DEFAULTS);
+  const [error, setError] = useState(null); // null | "missing" | "notfound"
 
   const load = async () => {
     try {
-      const { data } = await api.get("/display");
+      const { data } = await api.get(`/display?tenant=${tenantSlug}`);
       setOrders(data);
-    } catch {
+    } catch (err) {
+      if (err?.response?.status === 404) setError("notfound");
       /* ignore transient errors on the board */
     }
   };
 
   const loadTheme = async () => {
     try {
-      const { data } = await api.get("/display/theme");
+      const { data } = await api.get(`/display/theme?tenant=${tenantSlug}`);
       setTheme({
         bg: data.display_bg || DEFAULTS.bg,
         text: data.display_text || DEFAULTS.text,
@@ -37,12 +41,17 @@ export default function Display() {
         ready: data.display_ready || DEFAULTS.ready,
         name: data.restaurant_name || DEFAULTS.name,
       });
-    } catch {
+    } catch (err) {
+      if (err?.response?.status === 404) setError("notfound");
       /* keep defaults */
     }
   };
 
   useEffect(() => {
+    if (!tenantSlug) {
+      setError("missing");
+      return undefined;
+    }
     load();
     loadTheme();
     const poll = setInterval(load, 5000);
@@ -53,7 +62,23 @@ export default function Display() {
       clearInterval(themePoll);
       clearInterval(tick);
     };
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tenantSlug]);
+
+  if (error) {
+    const message =
+      error === "missing"
+        ? "Falta el identificador del restaurante en la URL"
+        : "Restaurante no encontrado";
+    return (
+      <div
+        className="min-h-screen flex items-center justify-center p-6 text-center"
+        style={{ backgroundColor: DEFAULTS.bg, color: DEFAULTS.text }}
+      >
+        <p className="text-2xl font-semibold">{message}</p>
+      </div>
+    );
+  }
 
   const preparing = orders.filter((o) => o.status === "pending" || o.status === "preparing");
   const ready = orders.filter((o) => o.status === "ready");

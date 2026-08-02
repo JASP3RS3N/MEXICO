@@ -5,12 +5,6 @@ import { toast } from "sonner";
 import { useAuth, HOME_BY_ROLE } from "@/context/AuthContext";
 import { Btn, Input, Field, Card } from "@/components/kit";
 
-const DEMO = [
-  { role: "Dueño", username: "dueno", password: "dueno123", color: "amber" },
-  { role: "Cajera", username: "caja", password: "caja123", color: "cyan" },
-  { role: "Preparación", username: "cocina", password: "cocina123", color: "blue" },
-];
-
 export default function Login() {
   const { login } = useAuth();
   const navigate = useNavigate();
@@ -75,22 +69,6 @@ export default function Login() {
               <LogIn className="h-4 w-4" /> Entrar
             </Btn>
           </form>
-
-          <div className="mt-6 pt-5 border-t border-border">
-            <p className="text-xs text-textDim text-center mb-3">Acceso rápido de demostración</p>
-            <div className="grid grid-cols-3 gap-2">
-              {DEMO.map((d) => (
-                <button
-                  key={d.username}
-                  onClick={() => doLogin(d.username, d.password)}
-                  disabled={loading}
-                  className="text-xs py-2 px-1 rounded-lg bg-surface2 border border-border hover:border-borderHover text-textMain hover:text-textBright transition disabled:opacity-50"
-                >
-                  {d.role}
-                </button>
-              ))}
-            </div>
-          </div>
         </Card>
       </div>
     </div>
