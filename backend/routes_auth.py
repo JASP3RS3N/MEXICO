@@ -1,16 +1,20 @@
 """Authentication and user management routes."""
 from fastapi import APIRouter, Depends, HTTPException
 
-from config import ROLE_LABELS, ROLES, clean, db, gen_id, now_iso
+from config import ROLE_LABELS, ROLE_SUPERADMIN, ROLES, clean, db, gen_id, now_iso, tenant_query
 from models import LoginRequest, UserCreate, UserUpdate
 from security import (
     create_token,
     get_current_user,
+    get_tenant_id,
     hash_password,
     public_user,
     require_owner,
     verify_password,
 )
+
+# Roles an owner is allowed to assign (never superadmin).
+ASSIGNABLE_ROLES = [r for r in ROLES if r != ROLE_SUPERADMIN]
 
 router = APIRouter()
 
@@ -43,14 +47,18 @@ async def me(user: dict = Depends(get_current_user)):
 # ---------------------------------------------------------------------------
 @router.get("/users")
 async def list_users(user: dict = Depends(require_owner)):
-    users = await db.users.find({}, {"_id": 0}).to_list(500)
+    tenant_id = get_tenant_id(user)
+    users = await db.users.find(tenant_query(tenant_id), {"_id": 0}).to_list(500)
     return [public_user(u) for u in users]
 
 
 @router.post("/users")
 async def create_user(payload: UserCreate, user: dict = Depends(require_owner)):
-    if payload.role not in ROLES:
-        raise HTTPException(status_code=400, detail=f"Rol inválido. Usa: {ROLES}")
+    tenant_id = get_tenant_id(user)
+    if payload.role == ROLE_SUPERADMIN:
+        raise HTTPException(status_code=403, detail="No puedes crear usuarios superadmin")
+    if payload.role not in ASSIGNABLE_ROLES:
+        raise HTTPException(status_code=400, detail=f"Rol inválido. Usa: {ASSIGNABLE_ROLES}")
     username = payload.username.lower().strip()
     if await db.users.find_one({"username": username}):
         raise HTTPException(status_code=409, detail="El usuario ya existe")
@@ -60,6 +68,7 @@ async def create_user(payload: UserCreate, user: dict = Depends(require_owner)):
         "username": username,
         "name": payload.name.strip(),
         "role": payload.role,
+        "tenant_id": tenant_id,  # inherits the owner's tenant
         "pin": payload.pin,
         "password_hash": hash_password(payload.password),
         "active": True,
@@ -71,16 +80,20 @@ async def create_user(payload: UserCreate, user: dict = Depends(require_owner)):
 
 @router.put("/users/{user_id}")
 async def update_user(user_id: str, payload: UserUpdate, user: dict = Depends(require_owner)):
-    target = await db.users.find_one({"id": user_id})
+    tenant_id = get_tenant_id(user)
+    target = await db.users.find_one(tenant_query(tenant_id, {"id": user_id}))
     if not target:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
 
+    # Note: tenant_id is never part of `updates`, so it can't be changed here.
     updates = {}
     if payload.name is not None:
         updates["name"] = payload.name.strip()
     if payload.role is not None:
-        if payload.role not in ROLES:
-            raise HTTPException(status_code=400, detail=f"Rol inválido. Usa: {ROLES}")
+        if payload.role == ROLE_SUPERADMIN:
+            raise HTTPException(status_code=403, detail="No puedes asignar el rol superadmin")
+        if payload.role not in ASSIGNABLE_ROLES:
+            raise HTTPException(status_code=400, detail=f"Rol inválido. Usa: {ASSIGNABLE_ROLES}")
         updates["role"] = payload.role
     if payload.active is not None:
         updates["active"] = payload.active
@@ -89,10 +102,12 @@ async def update_user(user_id: str, payload: UserUpdate, user: dict = Depends(re
     if payload.password:
         updates["password_hash"] = hash_password(payload.password)
 
-    # Guardrail: never lock out the last active owner.
+    # Guardrail: never lock out the last active owner of this tenant.
     if (updates.get("role") and updates["role"] != "owner") or updates.get("active") is False:
         if target["role"] == "owner":
-            active_owners = await db.users.count_documents({"role": "owner", "active": True})
+            active_owners = await db.users.count_documents(
+                tenant_query(tenant_id, {"role": "owner", "active": True})
+            )
             if active_owners <= 1:
                 raise HTTPException(
                     status_code=400,
@@ -100,21 +115,24 @@ async def update_user(user_id: str, payload: UserUpdate, user: dict = Depends(re
                 )
 
     if updates:
-        await db.users.update_one({"id": user_id}, {"$set": updates})
-    fresh = await db.users.find_one({"id": user_id}, {"_id": 0})
+        await db.users.update_one(tenant_query(tenant_id, {"id": user_id}), {"$set": updates})
+    fresh = await db.users.find_one(tenant_query(tenant_id, {"id": user_id}), {"_id": 0})
     return public_user(fresh)
 
 
 @router.delete("/users/{user_id}")
 async def delete_user(user_id: str, user: dict = Depends(require_owner)):
-    target = await db.users.find_one({"id": user_id})
+    tenant_id = get_tenant_id(user)
+    target = await db.users.find_one(tenant_query(tenant_id, {"id": user_id}))
     if not target:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
     if target["id"] == user["id"]:
         raise HTTPException(status_code=400, detail="No puedes eliminarte a ti mismo")
     if target["role"] == "owner":
-        active_owners = await db.users.count_documents({"role": "owner", "active": True})
+        active_owners = await db.users.count_documents(
+            tenant_query(tenant_id, {"role": "owner", "active": True})
+        )
         if active_owners <= 1:
             raise HTTPException(status_code=400, detail="No puedes eliminar al último dueño")
-    await db.users.delete_one({"id": user_id})
+    await db.users.delete_one(tenant_query(tenant_id, {"id": user_id}))
     return {"ok": True}
