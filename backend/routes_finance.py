@@ -4,9 +4,9 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Query
 
-from config import ORDER_PAID, clean, db, gen_id, now, now_iso
+from config import ORDER_PAID, clean, db, gen_id, now, now_iso, tenant_query
 from models import ExpenseCreate, SettingsUpdate
-from security import get_current_user, require_owner
+from security import get_current_user, get_tenant_id, require_owner
 
 router = APIRouter()
 
@@ -24,21 +24,21 @@ def _period_days(start: str, end: str) -> int:
         return 30
 
 
-async def _active_payroll() -> float:
+async def _active_payroll(tenant_id: str) -> float:
     """Monthly payroll = sum of active employees' wages."""
-    emps = await db.employees.find({"status": "active"}, {"_id": 0}).to_list(5000)
+    emps = await db.employees.find(tenant_query(tenant_id, {"status": "active"}), {"_id": 0}).to_list(5000)
     return round(sum(float(e.get("wage", 0) or 0) for e in emps), 2)
 
 
-async def _paid_orders(start: str, end: str):
+async def _paid_orders(start: str, end: str, tenant_id: str):
     # Paid is independent from fulfillment status; filter on the paid flag + paid_at.
-    query = {"paid": True, "paid_at": {"$gte": start, "$lte": end}}
+    query = tenant_query(tenant_id, {"paid": True, "paid_at": {"$gte": start, "$lte": end}})
     return await db.orders.find(query, {"_id": 0}).to_list(20000)
 
 
-async def _category_map():
-    cats = {c["id"]: c["name"] for c in await db.categories.find({}, {"_id": 0}).to_list(500)}
-    prods = await db.products.find({}, {"_id": 0}).to_list(2000)
+async def _category_map(tenant_id: str):
+    cats = {c["id"]: c["name"] for c in await db.categories.find(tenant_query(tenant_id), {"_id": 0}).to_list(500)}
+    prods = await db.products.find(tenant_query(tenant_id), {"_id": 0}).to_list(2000)
     return {p["id"]: cats.get(p.get("category_id"), "Sin categoría") for p in prods}
 
 
@@ -67,14 +67,15 @@ async def profit_and_loss(
     end: str = Query(None),
     user: dict = Depends(require_owner),
 ):
+    tenant_id = get_tenant_id(user)
     start = start or _month_start_iso()
     end = end or now_iso()
 
-    orders = await _paid_orders(start, end)
+    orders = await _paid_orders(start, end, tenant_id)
     agg = _aggregate(orders)
 
     expenses = await db.expenses.find(
-        {"date": {"$gte": start[:10], "$lte": end[:10]}}, {"_id": 0}
+        tenant_query(tenant_id, {"date": {"$gte": start[:10], "$lte": end[:10]}}), {"_id": 0}
     ).to_list(5000)
     manual_opex = round(sum(float(e["amount"]) for e in expenses), 2)
     expenses_by_cat = defaultdict(float)
@@ -82,7 +83,7 @@ async def profit_and_loss(
         expenses_by_cat[e.get("category", "General")] += float(e["amount"])
 
     # Payroll of active staff is auto-included (prorated by period length).
-    payroll_monthly = await _active_payroll()
+    payroll_monthly = await _active_payroll(tenant_id)
     payroll = round(payroll_monthly * _period_days(start, end) / 30, 2)
     if payroll:
         expenses_by_cat["Nómina"] += payroll
@@ -104,7 +105,7 @@ async def profit_and_loss(
     ]
 
     # category & product breakdown
-    cat_map = await _category_map()
+    cat_map = await _category_map(tenant_id)
     by_cat = defaultdict(float)
     by_product = defaultdict(lambda: {"qty": 0, "revenue": 0.0})
     for o in orders:
@@ -152,13 +153,14 @@ async def daily_sales(
     end: str = Query(None),
     user: dict = Depends(require_owner),
 ):
+    tenant_id = get_tenant_id(user)
     if not start or not end:
         n = now()
         day_start = datetime(n.year, n.month, n.day, tzinfo=timezone.utc)
         start = day_start.isoformat()
         end = (day_start + timedelta(days=1) - timedelta(seconds=1)).isoformat()
 
-    orders = await _paid_orders(start, end)
+    orders = await _paid_orders(start, end, tenant_id)
     agg = _aggregate(orders)
 
     by_method = defaultdict(lambda: {"count": 0, "total": 0.0})
@@ -193,34 +195,37 @@ async def daily_sales(
 # ---------------------------------------------------------------------------
 @router.get("/finance/dashboard")
 async def dashboard(user: dict = Depends(require_owner)):
+    tenant_id = get_tenant_id(user)
     n = now()
     day_start = datetime(n.year, n.month, n.day, tzinfo=timezone.utc).isoformat()
     day_end = now_iso()
     month_start = _month_start_iso()
 
-    today = _aggregate(await _paid_orders(day_start, day_end))
-    month_orders = await _paid_orders(month_start, day_end)
+    today = _aggregate(await _paid_orders(day_start, day_end, tenant_id))
+    month_orders = await _paid_orders(month_start, day_end, tenant_id)
     month = _aggregate(month_orders)
 
     month_expenses = await db.expenses.find(
-        {"date": {"$gte": month_start[:10], "$lte": day_end[:10]}}, {"_id": 0}
+        tenant_query(tenant_id, {"date": {"$gte": month_start[:10], "$lte": day_end[:10]}}), {"_id": 0}
     ).to_list(5000)
-    payroll_monthly = await _active_payroll()
+    payroll_monthly = await _active_payroll(tenant_id)
     # Month view carries the full monthly payroll of active staff.
     opex = sum(float(e["amount"]) for e in month_expenses) + payroll_monthly
     month_gross_profit = month["net_sales"] - month["cogs"]
     month_net_profit = round(month_gross_profit - opex, 2)
 
-    materials = await db.materials.find({"active": True}, {"_id": 0}).to_list(2000)
+    materials = await db.materials.find(tenant_query(tenant_id, {"active": True}), {"_id": 0}).to_list(2000)
     low_stock = [m for m in materials if float(m.get("current_stock", 0)) <= float(m.get("min_stock", 0))]
     inventory_value = round(
         sum(float(m.get("current_stock", 0)) * float(m.get("cost_per_unit", 0)) for m in materials), 2
     )
 
     active_orders = await db.orders.count_documents(
-        {"status": {"$in": ["pending", "preparing", "ready", "delivered"]}}
+        tenant_query(tenant_id, {"status": {"$in": ["pending", "preparing", "ready", "delivered"]}})
     )
-    open_pos = await db.purchase_orders.count_documents({"status": {"$in": ["draft", "ordered"]}})
+    open_pos = await db.purchase_orders.count_documents(
+        tenant_query(tenant_id, {"status": {"$in": ["draft", "ordered"]}})
+    )
 
     return {
         "today": today,
@@ -243,17 +248,20 @@ async def dashboard(user: dict = Depends(require_owner)):
 # ---------------------------------------------------------------------------
 @router.get("/expenses")
 async def list_expenses(start: str = Query(None), end: str = Query(None), user: dict = Depends(require_owner)):
-    query = {}
+    tenant_id = get_tenant_id(user)
+    extra = {}
     if start and end:
-        query = {"date": {"$gte": start[:10], "$lte": end[:10]}}
-    docs = await db.expenses.find(query, {"_id": 0}).sort("date", -1).to_list(2000)
+        extra = {"date": {"$gte": start[:10], "$lte": end[:10]}}
+    docs = await db.expenses.find(tenant_query(tenant_id, extra), {"_id": 0}).sort("date", -1).to_list(2000)
     return docs
 
 
 @router.post("/expenses")
 async def create_expense(payload: ExpenseCreate, user: dict = Depends(require_owner)):
+    tenant_id = get_tenant_id(user)
     doc = {
         "id": gen_id(),
+        "tenant_id": tenant_id,
         "category": payload.category or "General",
         "description": payload.description,
         "amount": round(float(payload.amount), 2),
@@ -267,7 +275,8 @@ async def create_expense(payload: ExpenseCreate, user: dict = Depends(require_ow
 
 @router.delete("/expenses/{expense_id}")
 async def delete_expense(expense_id: str, user: dict = Depends(require_owner)):
-    await db.expenses.delete_one({"id": expense_id})
+    tenant_id = get_tenant_id(user)
+    await db.expenses.delete_one(tenant_query(tenant_id, {"id": expense_id}))
     return {"ok": True}
 
 
@@ -276,9 +285,11 @@ async def delete_expense(expense_id: str, user: dict = Depends(require_owner)):
 # ---------------------------------------------------------------------------
 @router.get("/settings")
 async def get_settings(user: dict = Depends(get_current_user)):
-    s = await db.settings.find_one({"id": "settings"}, {"_id": 0})
+    tenant_id = get_tenant_id(user)
+    s = await db.settings.find_one(tenant_query(tenant_id, {"id": "settings"}), {"_id": 0})
     return s or {
         "id": "settings",
+        "tenant_id": tenant_id,
         "restaurant_name": "Smokehouse",
         "currency": "MXN",
         "tax_rate": 0.16,
@@ -288,6 +299,11 @@ async def get_settings(user: dict = Depends(get_current_user)):
 
 @router.put("/settings")
 async def update_settings(payload: SettingsUpdate, user: dict = Depends(require_owner)):
+    tenant_id = get_tenant_id(user)
     updates = {k: v for k, v in payload.model_dump(exclude_unset=True).items() if v is not None}
-    await db.settings.update_one({"id": "settings"}, {"$set": updates}, upsert=True)
-    return await db.settings.find_one({"id": "settings"}, {"_id": 0})
+    await db.settings.update_one(
+        tenant_query(tenant_id, {"id": "settings"}),
+        {"$set": updates, "$setOnInsert": {"tenant_id": tenant_id, "id": "settings"}},
+        upsert=True,
+    )
+    return await db.settings.find_one(tenant_query(tenant_id, {"id": "settings"}), {"_id": 0})
