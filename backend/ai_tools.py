@@ -7,7 +7,7 @@ data stays consistent. The assistant is owner-only, so tools run with owner righ
 """
 from datetime import datetime, timedelta, timezone
 
-from config import PO_DRAFT, db, gen_id, next_sequence, now, now_iso
+from config import PO_DRAFT, db, gen_id, next_sequence, now, now_iso, tenant_query
 from routes_finance import _active_payroll, _aggregate, _category_map, _month_start_iso, _paid_orders, _period_days
 from routes_orders import _compute_totals, _get_settings
 
@@ -29,25 +29,25 @@ def _period_range(period: str):
     return _month_start_iso(), now_iso()
 
 
-async def _find_product(ref: str):
+async def _find_product(ref: str, tenant_id: str):
     if not ref:
         return None
-    p = await db.products.find_one({"id": ref}, {"_id": 0})
+    p = await db.products.find_one(tenant_query(tenant_id, {"id": ref}), {"_id": 0})
     if p:
         return p
-    prods = await db.products.find({}, {"_id": 0}).to_list(2000)
+    prods = await db.products.find(tenant_query(tenant_id), {"_id": 0}).to_list(2000)
     ref_l = ref.lower()
     matches = [x for x in prods if ref_l in x["name"].lower()]
     return matches[0] if matches else None
 
 
-async def _find_material(ref: str):
+async def _find_material(ref: str, tenant_id: str):
     if not ref:
         return None
-    m = await db.materials.find_one({"id": ref}, {"_id": 0})
+    m = await db.materials.find_one(tenant_query(tenant_id, {"id": ref}), {"_id": 0})
     if m:
         return m
-    mats = await db.materials.find({}, {"_id": 0}).to_list(2000)
+    mats = await db.materials.find(tenant_query(tenant_id), {"_id": 0}).to_list(2000)
     ref_l = ref.lower()
     matches = [x for x in mats if ref_l in x["name"].lower()]
     return matches[0] if matches else None
@@ -305,14 +305,15 @@ TOOLS = [
 # ---------------------------------------------------------------------------
 async def execute_tool(name: str, args: dict, user: dict):
     """Run a tool. Returns (result_dict, action_summary_or_None)."""
-    settings = await _get_settings()
+    tenant_id = user.get("tenant_id")
+    settings = await _get_settings(tenant_id)
     cur = settings.get("currency", "MXN")
 
     if name == "get_financial_summary":
         start, end = _period_range(args.get("period", "month"))
-        orders = await _paid_orders(start, end)
+        orders = await _paid_orders(start, end, tenant_id)
         agg = _aggregate(orders)
-        expenses = await db.expenses.find({"date": {"$gte": start[:10], "$lte": end[:10]}}, {"_id": 0}).to_list(5000)
+        expenses = await db.expenses.find(tenant_query(tenant_id, {"date": {"$gte": start[:10], "$lte": end[:10]}}), {"_id": 0}).to_list(5000)
         opex = round(sum(float(e["amount"]) for e in expenses), 2)
         gross_profit = round(agg["net_sales"] - agg["cogs"], 2)
         net_profit = round(gross_profit - opex, 2)
@@ -335,8 +336,8 @@ async def execute_tool(name: str, args: dict, user: dict):
 
     if name == "get_sales_report":
         start, end = _period_range(args.get("period", "month"))
-        orders = await _paid_orders(start, end)
-        cat_map = await _category_map()
+        orders = await _paid_orders(start, end, tenant_id)
+        cat_map = await _category_map(tenant_id)
         by_cat, by_prod, by_method = {}, {}, {}
         for o in orders:
             m = o.get("payment_method", "efectivo") or "efectivo"
@@ -362,7 +363,7 @@ async def execute_tool(name: str, args: dict, user: dict):
         )
 
     if name == "list_low_stock":
-        materials = await db.materials.find({"active": True}, {"_id": 0}).to_list(2000)
+        materials = await db.materials.find(tenant_query(tenant_id, {"active": True}), {"_id": 0}).to_list(2000)
         low = []
         for m in materials:
             current = float(m.get("current_stock", 0))
@@ -383,8 +384,8 @@ async def execute_tool(name: str, args: dict, user: dict):
         return ({"insumos_bajo_stock": low, "total": len(low)}, None)
 
     if name == "list_menu":
-        prods = await db.products.find({}, {"_id": 0}).to_list(2000)
-        cats = {c["id"]: c["name"] for c in await db.categories.find({}, {"_id": 0}).to_list(500)}
+        prods = await db.products.find(tenant_query(tenant_id), {"_id": 0}).to_list(2000)
+        cats = {c["id"]: c["name"] for c in await db.categories.find(tenant_query(tenant_id), {"_id": 0}).to_list(500)}
         out = []
         for p in prods:
             price = float(p.get("price", 0))
@@ -402,7 +403,7 @@ async def execute_tool(name: str, args: dict, user: dict):
         return ({"menu": out, "moneda": cur}, None)
 
     if name == "list_materials":
-        mats = await db.materials.find({}, {"_id": 0}).sort("name", 1).to_list(2000)
+        mats = await db.materials.find(tenant_query(tenant_id), {"_id": 0}).sort("name", 1).to_list(2000)
         out = [
             {
                 "insumo": m["name"],
@@ -422,7 +423,7 @@ async def execute_tool(name: str, args: dict, user: dict):
             return ({"error": "Sin insumos"}, None)
         items, total, missing = [], 0.0, []
         for it in items_in:
-            mat = await _find_material(it.get("material", ""))
+            mat = await _find_material(it.get("material", ""), tenant_id)
             if not mat:
                 missing.append(it.get("material"))
                 continue
@@ -433,9 +434,10 @@ async def execute_tool(name: str, args: dict, user: dict):
             items.append({"material_id": mat["id"], "name": mat["name"], "unit": mat["unit"], "qty": qty, "unit_cost": unit_cost, "subtotal": subtotal})
         if not items:
             return ({"error": f"No encontré estos insumos: {missing}"}, None)
-        seq = await next_sequence("purchase_order")
+        seq = await next_sequence("purchase_order", tenant_id)
         doc = {
             "id": gen_id(),
+            "tenant_id": tenant_id,
             "po_number": f"OC-{seq:04d}",
             "supplier": args.get("supplier", "") or "",
             "items": items,
@@ -458,7 +460,7 @@ async def execute_tool(name: str, args: dict, user: dict):
         items_in = args.get("items", [])
         items, gross, missing = [], 0.0, []
         for it in items_in:
-            product = await _find_product(it.get("product", ""))
+            product = await _find_product(it.get("product", ""), tenant_id)
             if not product or not product.get("active", True):
                 missing.append(it.get("product"))
                 continue
@@ -476,9 +478,9 @@ async def execute_tool(name: str, args: dict, user: dict):
         if not items:
             return ({"error": f"No encontré estos productos: {missing}"}, None)
         totals = _compute_totals(gross, settings)
-        seq = await next_sequence("order")
+        seq = await next_sequence("order", tenant_id)
         doc = {
-            "id": gen_id(), "order_number": seq, "customer_name": args.get("customer_name", "") or "",
+            "id": gen_id(), "tenant_id": tenant_id, "order_number": seq, "customer_name": args.get("customer_name", "") or "",
             "table": "", "order_type": args.get("order_type", "para_llevar"), "notes": "Pedido creado por Asistente IA",
             "items": items, "subtotal": totals["subtotal"], "tax": totals["tax"], "total": totals["total"],
             "status": "pending", "paid": False, "payment_method": None,
@@ -492,12 +494,12 @@ async def execute_tool(name: str, args: dict, user: dict):
         return (result, f"Levantó la comanda #{doc['order_number']} por {_money(doc['total'], cur)} y la envió a cocina")
 
     if name == "update_product_price":
-        product = await _find_product(args.get("product", ""))
+        product = await _find_product(args.get("product", ""), tenant_id)
         if not product:
             return ({"error": f"No encontré el producto: {args.get('product')}"}, None)
         new_price = round(float(args.get("new_price", 0)), 2)
         old = float(product["price"])
-        await db.products.update_one({"id": product["id"]}, {"$set": {"price": new_price}})
+        await db.products.update_one(tenant_query(tenant_id, {"id": product["id"]}), {"$set": {"price": new_price}})
         return (
             {"producto": product["name"], "precio_anterior": old, "precio_nuevo": new_price},
             f"Cambió el precio de «{product['name']}» de {_money(old, cur)} a {_money(new_price, cur)}",
@@ -505,7 +507,7 @@ async def execute_tool(name: str, args: dict, user: dict):
 
     if name == "create_supplier":
         doc = {
-            "id": gen_id(), "name": (args.get("name") or "").strip(),
+            "id": gen_id(), "tenant_id": tenant_id, "name": (args.get("name") or "").strip(),
             "contact": args.get("contact", ""), "phone": args.get("phone", ""),
             "email": args.get("email", ""), "notes": args.get("notes", ""),
             "active": True, "created_at": now_iso(),
@@ -516,7 +518,7 @@ async def execute_tool(name: str, args: dict, user: dict):
         return ({"supplier": doc["name"], "id": doc["id"]}, f"Dio de alta al proveedor «{doc['name']}»")
 
     if name == "upsert_material":
-        mat = await _find_material(args.get("name", ""))
+        mat = await _find_material(args.get("name", ""), tenant_id)
         fields = {}
         for k in ("unit", "supplier"):
             if args.get(k) is not None:
@@ -526,10 +528,10 @@ async def execute_tool(name: str, args: dict, user: dict):
                 fields[k] = float(args[k])
         if mat:
             fields["updated_at"] = now_iso()
-            await db.materials.update_one({"id": mat["id"]}, {"$set": fields})
+            await db.materials.update_one(tenant_query(tenant_id, {"id": mat["id"]}), {"$set": fields})
             return ({"insumo": mat["name"], "actualizado": True, **fields}, f"Actualizó la materia prima «{mat['name']}»")
         doc = {
-            "id": gen_id(), "sku": "", "name": (args.get("name") or "").strip(),
+            "id": gen_id(), "tenant_id": tenant_id, "sku": "", "name": (args.get("name") or "").strip(),
             "unit": args.get("unit", "kg") or "kg", "category": "General",
             "cost_per_unit": float(args.get("cost_per_unit", 0) or 0),
             "current_stock": float(args.get("current_stock", 0) or 0),
@@ -544,12 +546,12 @@ async def execute_tool(name: str, args: dict, user: dict):
         return ({"insumo": doc["name"], "creado": True}, f"Dio de alta la materia prima «{doc['name']}»")
 
     if name == "set_product_bom":
-        product = await _find_product(args.get("product", ""))
+        product = await _find_product(args.get("product", ""), tenant_id)
         if not product:
             return ({"error": f"No encontré el producto: {args.get('product')}"}, None)
         recipe, cost, missing = [], 0.0, []
         for it in args.get("items", []):
-            mat = await _find_material(it.get("material", ""))
+            mat = await _find_material(it.get("material", ""), tenant_id)
             if not mat:
                 missing.append(it.get("material"))
                 continue
@@ -558,7 +560,7 @@ async def execute_tool(name: str, args: dict, user: dict):
             cost += float(mat.get("cost_per_unit", 0)) * qty
         if not recipe:
             return ({"error": f"No encontré estos insumos: {missing}"}, None)
-        await db.products.update_one({"id": product["id"]}, {"$set": {"recipe": recipe, "cost": round(cost, 2)}})
+        await db.products.update_one(tenant_query(tenant_id, {"id": product["id"]}), {"$set": {"recipe": recipe, "cost": round(cost, 2)}})
         result = {"producto": product["name"], "insumos": len(recipe), "costo_estimado": round(cost, 2)}
         if missing:
             result["no_encontrados"] = missing
@@ -567,10 +569,10 @@ async def execute_tool(name: str, args: dict, user: dict):
     if name == "create_product":
         cat_id = None
         if args.get("category"):
-            cat = await db.categories.find_one({"name": {"$regex": f"^{args['category']}$", "$options": "i"}}, {"_id": 0})
+            cat = await db.categories.find_one(tenant_query(tenant_id, {"name": {"$regex": f"^{args['category']}$", "$options": "i"}}), {"_id": 0})
             cat_id = cat["id"] if cat else None
         doc = {
-            "id": gen_id(), "name": (args.get("name") or "").strip(),
+            "id": gen_id(), "tenant_id": tenant_id, "name": (args.get("name") or "").strip(),
             "category_id": cat_id, "price": round(float(args.get("price", 0) or 0), 2),
             "description": args.get("description", ""), "station": args.get("station", "cocina") or "cocina",
             "active": True, "recipe": [], "cost": 0, "created_at": now_iso(),
@@ -582,14 +584,14 @@ async def execute_tool(name: str, args: dict, user: dict):
 
     if name == "get_cash_cut":
         start, end = _period_range(args.get("period", "today"))
-        orders = await _paid_orders(start, end)
+        orders = await _paid_orders(start, end, tenant_id)
         by_method = {}
         for o in orders:
             mth = o.get("payment_method", "efectivo") or "efectivo"
             by_method[mth] = round(by_method.get(mth, 0) + float(o.get("total", 0)), 2)
-        expenses = await db.expenses.find({"date": {"$gte": start[:10], "$lte": end[:10]}}, {"_id": 0}).to_list(5000)
+        expenses = await db.expenses.find(tenant_query(tenant_id, {"date": {"$gte": start[:10], "$lte": end[:10]}}), {"_id": 0}).to_list(5000)
         manual_opex = round(sum(float(e["amount"]) for e in expenses), 2)
-        nomina = round(await _active_payroll() * _period_days(start, end) / 30, 2)
+        nomina = round(await _active_payroll(tenant_id) * _period_days(start, end) / 30, 2)
         opex = round(manual_opex + nomina, 2)
         agg = _aggregate(orders)
         return (
@@ -615,11 +617,11 @@ async def execute_tool(name: str, args: dict, user: dict):
             return ({"error": "Falta el nombre del platillo"}, None)
         cat_id = None
         if args.get("category"):
-            cat = await db.categories.find_one({"name": {"$regex": f"^{args['category']}$", "$options": "i"}}, {"_id": 0})
+            cat = await db.categories.find_one(tenant_query(tenant_id, {"name": {"$regex": f"^{args['category']}$", "$options": "i"}}), {"_id": 0})
             cat_id = cat["id"] if cat else None
         recipe, cost, missing = [], 0.0, []
         for it in args.get("ingredients", []) or []:
-            mat = await _find_material(it.get("material", ""))
+            mat = await _find_material(it.get("material", ""), tenant_id)
             if not mat:
                 missing.append(it.get("material"))
                 continue
@@ -627,7 +629,7 @@ async def execute_tool(name: str, args: dict, user: dict):
             recipe.append({"material_id": mat["id"], "qty": qty})
             cost += float(mat.get("cost_per_unit", 0)) * qty
         doc = {
-            "id": gen_id(), "name": pname, "category_id": cat_id,
+            "id": gen_id(), "tenant_id": tenant_id, "name": pname, "category_id": cat_id,
             "price": round(float(args.get("price", 0) or 0), 2),
             "description": args.get("description", ""), "station": args.get("station", "cocina") or "cocina",
             "active": True, "recipe": recipe, "cost": round(cost, 2), "created_at": now_iso(),

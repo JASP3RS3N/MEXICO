@@ -18,8 +18,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from ai_tools import TOOLS, execute_tool
-from config import db, now, now_iso
-from security import require_owner
+from config import db, now, now_iso, tenant_query
+from security import get_tenant_id, require_owner
 
 logger = logging.getLogger("smokehouse.ai")
 router = APIRouter()
@@ -184,6 +184,8 @@ async def ai_status(user: dict = Depends(require_owner)):
 async def ai_chat(payload: ChatRequest, user: dict = Depends(require_owner)):
     if not AI_ENABLED:
         raise HTTPException(status_code=503, detail="La IA está deshabilitada.")
+    # Ensure the owner is tenant-scoped; execute_tool derives tenant_id from user.
+    tenant_id = get_tenant_id(user)  # noqa: F841 - validation guard
 
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     for m in payload.messages:
@@ -289,7 +291,8 @@ async def _plain_completion(messages, temperature=0.6):
 
 @router.get("/ai/recipe-suggestions")
 async def get_recipe_suggestions(user: dict = Depends(require_owner)):
-    doc = await db.ai_suggestions.find_one({"id": "recipe_suggestions"}, {"_id": 0})
+    tenant_id = get_tenant_id(user)
+    doc = await db.ai_suggestions.find_one(tenant_query(tenant_id, {"id": "recipe_suggestions"}), {"_id": 0})
     return {"current_month": now().strftime("%Y-%m"), "suggestion": doc}
 
 
@@ -297,7 +300,8 @@ async def get_recipe_suggestions(user: dict = Depends(require_owner)):
 async def generate_recipe_suggestions(user: dict = Depends(require_owner)):
     if not AI_ENABLED:
         raise HTTPException(status_code=503, detail="La IA está deshabilitada.")
-    materials = await db.materials.find({"active": True}, {"_id": 0}).sort("name", 1).to_list(2000)
+    tenant_id = get_tenant_id(user)
+    materials = await db.materials.find(tenant_query(tenant_id, {"active": True}), {"_id": 0}).sort("name", 1).to_list(2000)
     if not materials:
         raise HTTPException(status_code=400, detail="No hay materia prima registrada para sugerir recetas.")
 
@@ -321,8 +325,8 @@ async def generate_recipe_suggestions(user: dict = Depends(require_owner)):
     except httpx.RequestError as exc:
         raise HTTPException(status_code=503, detail=f"No se pudo conectar a LM Studio ({LMSTUDIO_BASE_URL}). Detalle: {exc}")
 
-    doc = {"id": "recipe_suggestions", "month": now().strftime("%Y-%m"), "content": content.strip(), "created_at": now_iso()}
-    await db.ai_suggestions.update_one({"id": "recipe_suggestions"}, {"$set": doc}, upsert=True)
+    doc = {"id": "recipe_suggestions", "tenant_id": tenant_id, "month": now().strftime("%Y-%m"), "content": content.strip(), "created_at": now_iso()}
+    await db.ai_suggestions.update_one(tenant_query(tenant_id, {"id": "recipe_suggestions"}), {"$set": doc}, upsert=True)
     return {"current_month": doc["month"], "suggestion": {k: v for k, v in doc.items() if k != "_id"}}
 
 
@@ -339,7 +343,8 @@ PRICE_SYSTEM = (
 async def price_suggestions(user: dict = Depends(require_owner)):
     if not AI_ENABLED:
         raise HTTPException(status_code=503, detail="La IA está deshabilitada.")
-    products = await db.products.find({"active": True}, {"_id": 0}).to_list(2000)
+    tenant_id = get_tenant_id(user)
+    products = await db.products.find(tenant_query(tenant_id, {"active": True}), {"_id": 0}).to_list(2000)
     if not products:
         raise HTTPException(status_code=400, detail="No hay productos para analizar.")
 
