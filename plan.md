@@ -60,9 +60,11 @@ métodos de pago y venta del día.
 - `/menu` · `/inventario` · `/compras` · `/gastos` · `/usuarios` · `/ajustes` (dueño).
 
 ## Semilla inicial (primer arranque)
-Usuarios: `dueno/dueno123`, `caja/caja123`, `cocina/cocina123`.
-Catálogo demo de smokehouse (brisket, costillas, pollo ahumado, combos, guarniciones,
-bebidas) con recetas y materia prima. Desactivable con `SEED_DEMO=false`.
+El superadmin de plataforma (`admin`) se crea siempre, sin tenant.
+El resto es un **tenant demo** (`slug="demo"`) que solo se siembra con `SEED_DEMO_TENANT=true`
+(desactivado por defecto): usuarios `dueno/dueno123`, `caja/caja123`, `cocina/cocina123`,
+settings, y el catálogo de smokehouse (brisket, costillas, pollo ahumado, combos,
+guarniciones, bebidas) con recetas y materia prima — todo asociado a ese `tenant_id`.
 
 ## Pruebas
 `backend/smoke_test.py` ejerce el API end-to-end (auth, RBAC, POS, cocina, cobro con

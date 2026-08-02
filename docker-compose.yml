@@ -18,7 +18,8 @@ services:
       DB_NAME: smokehouse
       JWT_SECRET: cambia-esto-en-produccion
       CORS_ORIGINS: http://localhost:3000
-      SEED_DEMO: "true"
+      # Siembra un tenant demo completo (usuarios + settings + catálogo). Desactivado por defecto.
+      SEED_DEMO_TENANT: "true"
       # --- Asistente IA (LM Studio) ---
       AI_ENABLED: "true"
       # LM Studio en la MISMA PC: deja host.docker.internal.

@@ -39,7 +39,8 @@ pip install -r requirements.txt
 # Configura backend/.env (ver .env.example)
 uvicorn server:app --reload --port 8001
 ```
-Variables (`backend/.env`): `MONGO_URL`, `DB_NAME`, `JWT_SECRET`, `CORS_ORIGINS`, `SEED_DEMO`.
+Variables (`backend/.env`): `MONGO_URL`, `DB_NAME`, `JWT_SECRET`, `CORS_ORIGINS`, `SEED_DEMO_TENANT`.
+`SEED_DEMO_TENANT=true` crea un tenant demo completo (usuarios dueño/caja/cocina + settings + catálogo, todo con su `tenant_id`); por defecto está desactivado.
 
 ### Frontend
 ```bash

@@ -111,9 +111,38 @@ async def _seed_superadmin():
     logger.info("Superadmin creado (usuario: admin).")
 
 
-async def _seed_users():
-    if await db.users.count_documents({}) > 0:
+async def _seed_demo_tenant():
+    """Seed a self-contained demo tenant (users + settings + catalog).
+
+    Disabled by default so it never contaminates a real production database;
+    enable explicitly with SEED_DEMO_TENANT=true. Idempotent: if the demo
+    tenant already exists, nothing is seeded. The demo owner/cashier/prep users
+    and the smokehouse catalog all belong to this tenant. Separate from
+    _seed_superadmin, which always runs and has no tenant.
+    """
+    if os.environ.get("SEED_DEMO_TENANT", "false").lower() != "true":
         return
+    if await db.tenants.find_one({"slug": "demo"}):
+        return
+
+    tenant = {
+        "id": gen_id(),
+        "name": "Smokehouse Demo",
+        "slug": "demo",
+        "plan": "control",
+        "active": True,
+        "created_at": now_iso(),
+    }
+    await db.tenants.insert_one(tenant)
+    tenant_id = tenant["id"]
+
+    await _seed_settings(tenant_id)
+    await _seed_users(tenant_id)
+    await _seed_catalog(tenant_id)
+    logger.info("Tenant demo creado (slug=demo).")
+
+
+async def _seed_users(tenant_id: str):
     defaults = [
         (ROLE_OWNER, "dueno", "Dueño", "dueno123"),
         (ROLE_CASHIER, "caja", "Cajera", "caja123"),
@@ -126,6 +155,7 @@ async def _seed_users():
                 "username": username,
                 "name": name,
                 "role": role,
+                "tenant_id": tenant_id,
                 "pin": None,
                 "password_hash": hash_password(pwd),
                 "active": True,
@@ -135,11 +165,12 @@ async def _seed_users():
     logger.info("Usuarios semilla creados (dueno/caja/cocina).")
 
 
-async def _seed_settings():
-    if not await db.settings.find_one({"id": "settings"}):
+async def _seed_settings(tenant_id: str):
+    if not await db.settings.find_one({"id": "settings", "tenant_id": tenant_id}):
         await db.settings.insert_one(
             {
                 "id": "settings",
+                "tenant_id": tenant_id,
                 "restaurant_name": "El Ahumadero — Smokehouse",
                 "currency": "MXN",
                 "tax_rate": 0.16,
@@ -148,10 +179,8 @@ async def _seed_settings():
         )
 
 
-async def _seed_catalog():
-    if os.environ.get("SEED_DEMO", "true").lower() != "true":
-        return
-    if await db.products.count_documents({}) > 0:
+async def _seed_catalog(tenant_id: str):
+    if await db.products.count_documents({"tenant_id": tenant_id}) > 0:
         return
 
     # Categories
@@ -159,13 +188,13 @@ async def _seed_catalog():
     for i, name in enumerate(["BBQ / Carnes", "Combos", "Guarniciones", "Bebidas", "Postres"]):
         cid = gen_id()
         cats[name] = cid
-        await db.categories.insert_one({"id": cid, "name": name, "sort_order": i, "created_at": now_iso()})
+        await db.categories.insert_one({"id": cid, "tenant_id": tenant_id, "name": name, "sort_order": i, "created_at": now_iso()})
 
     # Raw materials (materia prima)
     def mat(name, unit, cost, stock, mn, par, supplier, cat="Insumos"):
         mid = gen_id()
         return mid, {
-            "id": mid, "sku": "", "name": name, "unit": unit, "category": cat,
+            "id": mid, "tenant_id": tenant_id, "sku": "", "name": name, "unit": unit, "category": cat,
             "cost_per_unit": cost, "current_stock": stock, "min_stock": mn, "par_stock": par,
             "supplier": supplier, "active": True, "created_at": now_iso(), "updated_at": now_iso(),
         }
@@ -194,7 +223,7 @@ async def _seed_catalog():
     def prod(name, cat, price, station, desc, recipe):
         cost = round(sum(mat_cost.get(r["material_id"], 0) * r["qty"] for r in recipe), 2)
         return {
-            "id": gen_id(), "name": name, "category_id": cats[cat], "price": price,
+            "id": gen_id(), "tenant_id": tenant_id, "name": name, "category_id": cats[cat], "price": price,
             "description": desc, "station": station, "active": True,
             "recipe": recipe, "cost": cost,
             "created_at": now_iso(),
@@ -230,10 +259,8 @@ async def _seed_catalog():
 @app.on_event("startup")
 async def startup():
     await _ensure_indexes()
-    await _seed_settings()
-    await _seed_users()
     await _seed_superadmin()
-    await _seed_catalog()
+    await _seed_demo_tenant()
     logger.info("Smokehouse API lista.")
 
 
