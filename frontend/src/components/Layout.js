@@ -110,15 +110,17 @@ export default function Layout({ children }) {
           </NavLink>
         ))}
 
-        <a
-          href="/pantalla"
-          target="_blank"
-          rel="noreferrer"
-          className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-textMain hover:text-textBright hover:bg-surface2 border border-transparent min-w-0"
-        >
-          <Monitor className="h-[18px] w-[18px] shrink-0" />
-          <span className="truncate flex-1">Pantalla Cliente</span>
-        </a>
+        {user?.tenant_slug && (
+          <a
+            href={`/pantalla/${user.tenant_slug}`}
+            target="_blank"
+            rel="noreferrer"
+            className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-textMain hover:text-textBright hover:bg-surface2 border border-transparent min-w-0"
+          >
+            <Monitor className="h-[18px] w-[18px] shrink-0" />
+            <span className="truncate flex-1">Pantalla Cliente</span>
+          </a>
+        )}
       </nav>
 
       <div className="p-3 border-t border-border shrink-0">

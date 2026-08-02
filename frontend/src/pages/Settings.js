@@ -3,6 +3,7 @@ import { Save, Settings as SettingsIcon, Monitor, Palette, RotateCcw } from "luc
 import { toast } from "sonner";
 import api from "@/lib/api";
 import { useTheme } from "@/context/ThemeContext";
+import { useAuth } from "@/context/AuthContext";
 import { PageHeader } from "@/components/Layout";
 import { Btn, Card, CardHead, Input, Select, Field, Toggle, PageLoader } from "@/components/kit";
 
@@ -14,6 +15,7 @@ const THEME_DEFAULTS = {
 
 export default function SettingsPage() {
   const { applyTheme } = useTheme();
+  const { user } = useAuth();
   const [settings, setSettings] = useState(null);
   const [saving, setSaving] = useState(false);
 
@@ -136,7 +138,7 @@ export default function SettingsPage() {
           <ColorField label="En preparación" value={settings.display_prep || THEME_DEFAULTS.display_prep} onChange={(v) => setColor("display_prep", v)} />
           <ColorField label="Listo" value={settings.display_ready || THEME_DEFAULTS.display_ready} onChange={(v) => setColor("display_ready", v)} />
           <p className="sm:col-span-2 lg:col-span-4 text-xs text-textDim">
-            Guarda los cambios y abre la <a href="/pantalla" target="_blank" rel="noreferrer" className="text-money underline">pantalla de cliente</a> para verlos (se actualiza sola cada minuto).
+            Guarda los cambios y abre la <a href={`/pantalla/${user?.tenant_slug}`} target="_blank" rel="noreferrer" className="text-money underline">pantalla de cliente</a> para verlos (se actualiza sola cada minuto).
           </p>
         </div>
       </Card>
@@ -148,7 +150,7 @@ export default function SettingsPage() {
             Abre esta pantalla en un monitor o TV para que los clientes vean el número de su orden y cuándo está lista.
             No requiere iniciar sesión.
           </p>
-          <a href="/pantalla" target="_blank" rel="noreferrer">
+          <a href={`/pantalla/${user?.tenant_slug}`} target="_blank" rel="noreferrer">
             <Btn variant="secondary"><Monitor className="h-4 w-4" /> Abrir pantalla de cliente</Btn>
           </a>
         </div>

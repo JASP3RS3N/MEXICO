@@ -19,6 +19,17 @@ ASSIGNABLE_ROLES = [r for r in ROLES if r != ROLE_SUPERADMIN]
 router = APIRouter()
 
 
+async def _with_tenant_slug(user_public: dict) -> dict:
+    """Attach the tenant's slug to a public user dict (null for superadmin)."""
+    tenant_id = user_public.get("tenant_id")
+    slug = None
+    if tenant_id:
+        tenant = await db.tenants.find_one({"id": tenant_id}, {"_id": 0, "slug": 1})
+        if tenant:
+            slug = tenant.get("slug")
+    return {**user_public, "tenant_slug": slug}
+
+
 @router.post("/auth/login")
 async def login(payload: LoginRequest):
     user = await db.users.find_one({"username": payload.username.lower().strip()})
@@ -29,7 +40,7 @@ async def login(payload: LoginRequest):
     token = create_token(user)
     return {
         "token": token,
-        "user": public_user(clean(user)),
+        "user": await _with_tenant_slug(public_user(clean(user))),
         "role_label": ROLE_LABELS.get(user["role"], user["role"]),
     }
 
@@ -37,7 +48,7 @@ async def login(payload: LoginRequest):
 @router.get("/auth/me")
 async def me(user: dict = Depends(get_current_user)):
     return {
-        "user": public_user(user),
+        "user": await _with_tenant_slug(public_user(user)),
         "role_label": ROLE_LABELS.get(user["role"], user["role"]),
     }
 
