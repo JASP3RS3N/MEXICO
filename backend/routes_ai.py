@@ -185,7 +185,7 @@ async def ai_chat(payload: ChatRequest, user: dict = Depends(require_owner)):
     if not AI_ENABLED:
         raise HTTPException(status_code=503, detail="La IA está deshabilitada.")
     # Ensure the owner is tenant-scoped; execute_tool derives tenant_id from user.
-    tenant_id = get_tenant_id(user)  # noqa: F841 - validation guard
+    tenant_id = get_tenant_id(user)
 
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     for m in payload.messages:

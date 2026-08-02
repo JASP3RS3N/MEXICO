@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from config import PO_DRAFT, db, gen_id, next_sequence, now, now_iso, tenant_query
 from routes_finance import _active_payroll, _aggregate, _category_map, _month_start_iso, _paid_orders, _period_days
 from routes_orders import _compute_totals, _get_settings
+from security import get_tenant_id
 
 
 # ---------------------------------------------------------------------------
@@ -305,7 +306,7 @@ TOOLS = [
 # ---------------------------------------------------------------------------
 async def execute_tool(name: str, args: dict, user: dict):
     """Run a tool. Returns (result_dict, action_summary_or_None)."""
-    tenant_id = user.get("tenant_id")
+    tenant_id = get_tenant_id(user)
     settings = await _get_settings(tenant_id)
     cur = settings.get("currency", "MXN")
 
