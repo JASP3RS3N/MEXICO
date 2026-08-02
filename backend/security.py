@@ -12,6 +12,7 @@ from config import (
     JWT_EXPIRE_HOURS,
     JWT_SECRET,
     ROLE_OWNER,
+    ROLE_SUPERADMIN,
     clean,
     db,
     now,
@@ -42,6 +43,7 @@ def create_token(user: dict) -> str:
         "sub": user["id"],
         "username": user["username"],
         "role": user["role"],
+        "tenant_id": user.get("tenant_id"),
         "exp": now() + timedelta(hours=JWT_EXPIRE_HOURS),
     }
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
@@ -69,6 +71,14 @@ async def get_current_user(
     user = await db.users.find_one({"id": payload.get("sub")})
     if not user or not user.get("active", True):
         raise HTTPException(status_code=401, detail="Usuario no encontrado o inactivo")
+
+    # Multi-tenant guard: if the token is scoped to a tenant, the DB user must
+    # belong to the same tenant. Superadmins may have tenant_id = None.
+    token_tid = payload.get("tenant_id")
+    if user.get("role") != ROLE_SUPERADMIN:
+        if token_tid is None or user.get("tenant_id") != token_tid:
+            raise HTTPException(status_code=401, detail="Tenant inválido")
+
     return clean(user)
 
 
@@ -88,6 +98,17 @@ def require_roles(*roles: str):
 
 # Owner is the only role allowed to see finances / daily sales.
 require_owner = require_roles(ROLE_OWNER)
+
+# Superadmin manages the platform (all tenants).
+require_superadmin = require_roles(ROLE_SUPERADMIN)
+
+
+def get_tenant_id(user: dict) -> str:
+    """Extract tenant_id from authenticated user. Raises 400 if missing."""
+    tid = user.get("tenant_id")
+    if not tid:
+        raise HTTPException(status_code=400, detail="Usuario sin tenant asignado")
+    return tid
 
 
 def public_user(user: dict) -> dict:

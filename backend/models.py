@@ -235,6 +235,25 @@ class EmployeeTerminate(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Tenants (multi-tenant)
+# ---------------------------------------------------------------------------
+class TenantCreate(BaseModel):
+    name: str
+    slug: str
+    owner_name: str
+    owner_username: str
+    owner_password: str
+    plan: str = "control"
+
+
+class TenantUpdate(BaseModel):
+    name: Optional[str] = None
+    slug: Optional[str] = None
+    plan: Optional[str] = None
+    active: Optional[bool] = None
+
+
+# ---------------------------------------------------------------------------
 # Bank terminal payment webhook
 # ---------------------------------------------------------------------------
 class TerminalPayment(BaseModel):

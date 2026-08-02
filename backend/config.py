@@ -39,12 +39,14 @@ CORS_ORIGINS = os.environ.get("CORS_ORIGINS", "*").split(",")
 ROLE_OWNER = "owner"       # Dueño: acceso total, único que ve finanzas
 ROLE_CASHIER = "cashier"   # Cajera: levanta órdenes y cobra
 ROLE_PREP = "prep"         # Preparación: acepta y avanza comandas
-ROLES = [ROLE_OWNER, ROLE_CASHIER, ROLE_PREP]
+ROLE_SUPERADMIN = "superadmin"  # Plataforma: administra todos los tenants
+ROLES = [ROLE_OWNER, ROLE_CASHIER, ROLE_PREP, ROLE_SUPERADMIN]
 
 ROLE_LABELS = {
     ROLE_OWNER: "Dueño",
     ROLE_CASHIER: "Cajera",
     ROLE_PREP: "Preparación",
+    ROLE_SUPERADMIN: "Super Admin",
 }
 
 # Order lifecycle (comanda)
@@ -85,10 +87,13 @@ def now_iso() -> str:
     return now().isoformat()
 
 
-async def next_sequence(name: str) -> int:
-    """Atomically increment and return a named counter (used for order/PO numbers)."""
+async def next_sequence(name: str, tenant_id: str) -> int:
+    """Atomically increment and return a named counter, scoped per tenant.
+
+    Each tenant keeps its own independent sequence via a ``{tenant_id}:{name}`` key.
+    """
     doc = await db.counters.find_one_and_update(
-        {"_id": name},
+        {"_id": f"{tenant_id}:{name}"},
         {"$inc": {"seq": 1}},
         upsert=True,
         return_document=True,
@@ -101,3 +106,11 @@ def clean(doc: dict) -> dict:
     if doc and "_id" in doc:
         doc = {k: v for k, v in doc.items() if k != "_id"}
     return doc
+
+
+def tenant_query(tenant_id: str, extra: dict = None) -> dict:
+    """Build a Mongo query always scoped to a tenant."""
+    q = {"tenant_id": tenant_id}
+    if extra:
+        q.update(extra)
+    return q
