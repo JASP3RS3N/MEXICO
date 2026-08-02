@@ -3,9 +3,9 @@ import os
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from config import ORDER_CANCELLED, db, now_iso
+from config import ORDER_CANCELLED, db, now_iso, tenant_query
 from models import TerminalPayment
-from security import require_owner
+from security import get_tenant_id, require_owner
 from orders_service import settle_order
 
 router = APIRouter()
@@ -18,18 +18,23 @@ PAYMENTS_WEBHOOK_SECRET = os.environ.get("PAYMENTS_WEBHOOK_SECRET", "cambia-este
 # ---------------------------------------------------------------------------
 @router.get("/alerts")
 async def list_alerts(include_resolved: bool = False, user: dict = Depends(require_owner)):
-    query = {} if include_resolved else {"resolved": False}
-    return await db.alerts.find(query, {"_id": 0}).sort("created_at", -1).to_list(500)
+    tenant_id = get_tenant_id(user)
+    extra = {} if include_resolved else {"resolved": False}
+    return await db.alerts.find(tenant_query(tenant_id, extra), {"_id": 0}).sort("created_at", -1).to_list(500)
 
 
 @router.get("/alerts/count")
 async def alerts_count(user: dict = Depends(require_owner)):
-    return {"unresolved": await db.alerts.count_documents({"resolved": False})}
+    tenant_id = get_tenant_id(user)
+    return {"unresolved": await db.alerts.count_documents(tenant_query(tenant_id, {"resolved": False}))}
 
 
 @router.post("/alerts/{alert_id}/resolve")
 async def resolve_alert(alert_id: str, user: dict = Depends(require_owner)):
-    await db.alerts.update_one({"id": alert_id}, {"$set": {"resolved": True, "resolved_at": now_iso()}})
+    tenant_id = get_tenant_id(user)
+    await db.alerts.update_one(
+        tenant_query(tenant_id, {"id": alert_id}), {"$set": {"resolved": True, "resolved_at": now_iso()}}
+    )
     return {"ok": True}
 
 
@@ -37,6 +42,7 @@ async def resolve_alert(alert_id: str, user: dict = Depends(require_owner)):
 # Bank terminal webhook — detects card charges and settles the order.
 # Public endpoint protected by a shared secret; point Clip / Mercado Pago /
 # n8n at it. Cash is confirmed by the cashier in the POS (no webhook needed).
+# No auth → tenant is derived from the matched order document.
 # ---------------------------------------------------------------------------
 @router.post("/payments/terminal")
 async def terminal_payment(payload: TerminalPayment):
@@ -59,10 +65,12 @@ async def terminal_payment(payload: TerminalPayment):
     if not order:
         raise HTTPException(status_code=404, detail="No se encontró una orden pendiente que coincida con el cobro")
 
+    # Public webhook has no user; derive tenant scope from the order itself.
+    tenant_id = order["tenant_id"]
     actor = {"id": "terminal", "name": f"Terminal {payload.reference or ''}".strip()}
     fresh, change = await settle_order(order, payload.method or "tarjeta", float(payload.amount), actor)
     await db.orders.update_one(
-        {"id": order["id"]},
+        tenant_query(tenant_id, {"id": order["id"]}),
         {"$set": {"terminal_reference": payload.reference or "", "terminal_external_id": payload.external_id or ""}},
     )
     return {"ok": True, "order_number": fresh["order_number"], "total": fresh["total"], "change": change}

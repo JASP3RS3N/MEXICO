@@ -4,7 +4,7 @@ import os
 
 import httpx
 
-from config import clean, db, gen_id, now_iso
+from config import clean, db, gen_id, now_iso, tenant_query
 
 logger = logging.getLogger("smokehouse.alerts")
 
@@ -24,24 +24,27 @@ async def _fire_webhook(alert: dict):
 
 async def maybe_low_stock_alert(material_id: str):
     """Create an alert when a material is at/below its minimum (deduped per material)."""
+    # Looked up by its unique id; tenant scope is derived from the material itself.
     mat = await db.materials.find_one({"id": material_id}, {"_id": 0})
     if not mat:
         return
+    tenant_id = mat.get("tenant_id")
     current = float(mat.get("current_stock", 0))
     minimum = float(mat.get("min_stock", 0))
     if current > minimum:
         # Back above minimum → auto-resolve any open alert.
         await db.alerts.update_many(
-            {"material_id": material_id, "type": "low_stock", "resolved": False},
+            tenant_query(tenant_id, {"material_id": material_id, "type": "low_stock", "resolved": False}),
             {"$set": {"resolved": True, "resolved_at": now_iso()}},
         )
         return
-    if await db.alerts.find_one({"material_id": material_id, "type": "low_stock", "resolved": False}):
+    if await db.alerts.find_one(tenant_query(tenant_id, {"material_id": material_id, "type": "low_stock", "resolved": False})):
         return  # already alerted, don't spam
 
     level = "critical" if current <= 0 else "warning"
     alert = {
         "id": gen_id(),
+        "tenant_id": tenant_id,
         "type": "low_stock",
         "material_id": material_id,
         "name": mat["name"],
@@ -62,21 +65,24 @@ async def maybe_low_stock_alert(material_id: str):
 
 async def maybe_low_stock_alert_product(product_id: str):
     """Low-stock alert for a finished-goods product (track_stock enabled)."""
+    # Looked up by its unique id; tenant scope is derived from the product itself.
     prod = await db.products.find_one({"id": product_id}, {"_id": 0})
     if not prod or not prod.get("track_stock"):
         return
+    tenant_id = prod.get("tenant_id")
     current = float(prod.get("current_stock", 0))
     minimum = float(prod.get("min_stock", 0))
     if current > minimum:
         await db.alerts.update_many(
-            {"ref_id": product_id, "type": "low_stock_product", "resolved": False},
+            tenant_query(tenant_id, {"ref_id": product_id, "type": "low_stock_product", "resolved": False}),
             {"$set": {"resolved": True, "resolved_at": now_iso()}},
         )
         return
-    if await db.alerts.find_one({"ref_id": product_id, "type": "low_stock_product", "resolved": False}):
+    if await db.alerts.find_one(tenant_query(tenant_id, {"ref_id": product_id, "type": "low_stock_product", "resolved": False})):
         return
     alert = {
         "id": gen_id(),
+        "tenant_id": tenant_id,
         "type": "low_stock_product",
         "ref_type": "product",
         "ref_id": product_id,
