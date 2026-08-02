@@ -11,6 +11,7 @@ from config import (
     gen_id,
     next_sequence,
     now_iso,
+    tenant_query,
 )
 from models import (
     MaterialCreate,
@@ -19,15 +20,16 @@ from models import (
     PurchaseOrderCreate,
     StockAdjust,
 )
-from security import get_current_user, require_owner, require_roles
+from security import get_current_user, get_tenant_id, require_owner, require_roles
 
 router = APIRouter()
 
 
-async def _record_movement(material_id: str, mtype: str, qty: float, reference: str, user_id: str):
+async def _record_movement(material_id: str, mtype: str, qty: float, reference: str, user_id: str, tenant_id: str):
     await db.inventory_movements.insert_one(
         {
             "id": gen_id(),
+            "tenant_id": tenant_id,
             "material_id": material_id,
             "type": mtype,  # purchase | consumption | adjustment
             "qty": qty,
@@ -43,14 +45,17 @@ async def _record_movement(material_id: str, mtype: str, qty: float, reference: 
 # ---------------------------------------------------------------------------
 @router.get("/materials")
 async def list_materials(user: dict = Depends(require_roles("owner", "prep"))):
-    materials = await db.materials.find({}, {"_id": 0}).sort("name", 1).to_list(2000)
+    tenant_id = get_tenant_id(user)
+    materials = await db.materials.find(tenant_query(tenant_id), {"_id": 0}).sort("name", 1).to_list(2000)
     return materials
 
 
 @router.post("/materials")
 async def create_material(payload: MaterialCreate, user: dict = Depends(require_owner)):
+    tenant_id = get_tenant_id(user)
     doc = {
         "id": gen_id(),
+        "tenant_id": tenant_id,
         "sku": payload.sku or "",
         "name": payload.name.strip(),
         "unit": payload.unit,
@@ -67,51 +72,56 @@ async def create_material(payload: MaterialCreate, user: dict = Depends(require_
     }
     await db.materials.insert_one(doc)
     if doc["current_stock"]:
-        await _record_movement(doc["id"], "adjustment", doc["current_stock"], "Inventario inicial", user["id"])
+        await _record_movement(doc["id"], "adjustment", doc["current_stock"], "Inventario inicial", user["id"], tenant_id)
     return clean(doc)
 
 
 @router.put("/materials/{material_id}")
 async def update_material(material_id: str, payload: MaterialUpdate, user: dict = Depends(require_owner)):
-    material = await db.materials.find_one({"id": material_id})
+    tenant_id = get_tenant_id(user)
+    material = await db.materials.find_one(tenant_query(tenant_id, {"id": material_id}))
     if not material:
         raise HTTPException(status_code=404, detail="Materia prima no encontrada")
     updates = {k: v for k, v in payload.model_dump(exclude_unset=True).items() if v is not None}
     if updates:
         updates["updated_at"] = now_iso()
-        await db.materials.update_one({"id": material_id}, {"$set": updates})
-    return await db.materials.find_one({"id": material_id}, {"_id": 0})
+        await db.materials.update_one(tenant_query(tenant_id, {"id": material_id}), {"$set": updates})
+    return await db.materials.find_one(tenant_query(tenant_id, {"id": material_id}), {"_id": 0})
 
 
 @router.post("/materials/{material_id}/adjust")
 async def adjust_stock(material_id: str, payload: StockAdjust, user: dict = Depends(require_owner)):
-    material = await db.materials.find_one({"id": material_id})
+    tenant_id = get_tenant_id(user)
+    material = await db.materials.find_one(tenant_query(tenant_id, {"id": material_id}))
     if not material:
         raise HTTPException(status_code=404, detail="Materia prima no encontrada")
     new_stock = float(material.get("current_stock", 0)) + float(payload.qty)
     await db.materials.update_one(
-        {"id": material_id}, {"$set": {"current_stock": new_stock, "updated_at": now_iso()}}
+        tenant_query(tenant_id, {"id": material_id}), {"$set": {"current_stock": new_stock, "updated_at": now_iso()}}
     )
-    await _record_movement(material_id, "adjustment", float(payload.qty), payload.reason or "Ajuste", user["id"])
-    return await db.materials.find_one({"id": material_id}, {"_id": 0})
+    await _record_movement(material_id, "adjustment", float(payload.qty), payload.reason or "Ajuste", user["id"], tenant_id)
+    return await db.materials.find_one(tenant_query(tenant_id, {"id": material_id}), {"_id": 0})
 
 
 @router.delete("/materials/{material_id}")
 async def delete_material(material_id: str, user: dict = Depends(require_owner)):
-    await db.materials.delete_one({"id": material_id})
+    tenant_id = get_tenant_id(user)
+    await db.materials.delete_one(tenant_query(tenant_id, {"id": material_id}))
     return {"ok": True}
 
 
 @router.get("/materials/low-stock")
 async def low_stock(user: dict = Depends(require_owner)):
-    materials = await db.materials.find({"active": True}, {"_id": 0}).to_list(2000)
+    tenant_id = get_tenant_id(user)
+    materials = await db.materials.find(tenant_query(tenant_id, {"active": True}), {"_id": 0}).to_list(2000)
     return [m for m in materials if float(m.get("current_stock", 0)) <= float(m.get("min_stock", 0))]
 
 
 @router.get("/inventory/movements")
 async def movements(material_id: str = None, user: dict = Depends(require_owner)):
-    query = {"material_id": material_id} if material_id else {}
-    docs = await db.inventory_movements.find(query, {"_id": 0}).sort("created_at", -1).to_list(500)
+    tenant_id = get_tenant_id(user)
+    extra = {"material_id": material_id} if material_id else {}
+    docs = await db.inventory_movements.find(tenant_query(tenant_id, extra), {"_id": 0}).sort("created_at", -1).to_list(500)
     return docs
 
 
@@ -120,14 +130,16 @@ async def movements(material_id: str = None, user: dict = Depends(require_owner)
 # ---------------------------------------------------------------------------
 @router.get("/purchase-orders")
 async def list_pos(user: dict = Depends(require_owner)):
-    pos = await db.purchase_orders.find({}, {"_id": 0}).sort("created_at", -1).to_list(500)
+    tenant_id = get_tenant_id(user)
+    pos = await db.purchase_orders.find(tenant_query(tenant_id), {"_id": 0}).sort("created_at", -1).to_list(500)
     return pos
 
 
 @router.get("/purchase-orders/suggestions")
 async def po_suggestions(user: dict = Depends(require_owner)):
     """Suggest reorder quantities for materials at/below their minimum stock."""
-    materials = await db.materials.find({"active": True}, {"_id": 0}).to_list(2000)
+    tenant_id = get_tenant_id(user)
+    materials = await db.materials.find(tenant_query(tenant_id, {"active": True}), {"_id": 0}).to_list(2000)
     suggestions = []
     for m in materials:
         current = float(m.get("current_stock", 0))
@@ -155,13 +167,14 @@ async def po_suggestions(user: dict = Depends(require_owner)):
 
 @router.post("/purchase-orders")
 async def create_po(payload: PurchaseOrderCreate, user: dict = Depends(require_owner)):
+    tenant_id = get_tenant_id(user)
     if not payload.items:
         raise HTTPException(status_code=400, detail="La orden de compra necesita al menos un artículo")
 
     items = []
     total = 0.0
     for it in payload.items:
-        mat = await db.materials.find_one({"id": it.material_id}, {"_id": 0})
+        mat = await db.materials.find_one(tenant_query(tenant_id, {"id": it.material_id}), {"_id": 0})
         if not mat:
             raise HTTPException(status_code=404, detail=f"Materia prima {it.material_id} no encontrada")
         unit_cost = float(it.unit_cost if it.unit_cost is not None else mat.get("cost_per_unit", 0))
@@ -178,9 +191,10 @@ async def create_po(payload: PurchaseOrderCreate, user: dict = Depends(require_o
             }
         )
 
-    seq = await next_sequence("purchase_order")
+    seq = await next_sequence("purchase_order", tenant_id)
     doc = {
         "id": gen_id(),
+        "tenant_id": tenant_id,
         "po_number": f"OC-{seq:04d}",
         "supplier": payload.supplier or "",
         "items": items,
@@ -199,7 +213,8 @@ async def create_po(payload: PurchaseOrderCreate, user: dict = Depends(require_o
 
 @router.put("/purchase-orders/{po_id}/status")
 async def update_po_status(po_id: str, payload: POStatusUpdate, user: dict = Depends(require_owner)):
-    po = await db.purchase_orders.find_one({"id": po_id})
+    tenant_id = get_tenant_id(user)
+    po = await db.purchase_orders.find_one(tenant_query(tenant_id, {"id": po_id}))
     if not po:
         raise HTTPException(status_code=404, detail="Orden de compra no encontrada")
     if payload.status not in (PO_ORDERED, PO_RECEIVED, PO_CANCELLED):
@@ -212,11 +227,11 @@ async def update_po_status(po_id: str, payload: POStatusUpdate, user: dict = Dep
     # Receiving a PO increases stock and updates the material's last cost.
     if payload.status == PO_RECEIVED:
         for item in po["items"]:
-            mat = await db.materials.find_one({"id": item["material_id"]})
+            mat = await db.materials.find_one(tenant_query(tenant_id, {"id": item["material_id"]}))
             if mat:
                 new_stock = float(mat.get("current_stock", 0)) + float(item["qty"])
                 await db.materials.update_one(
-                    {"id": item["material_id"]},
+                    tenant_query(tenant_id, {"id": item["material_id"]}),
                     {"$set": {
                         "current_stock": new_stock,
                         "cost_per_unit": round(float(item["unit_cost"]), 4),
@@ -224,18 +239,19 @@ async def update_po_status(po_id: str, payload: POStatusUpdate, user: dict = Dep
                     }},
                 )
                 await _record_movement(
-                    item["material_id"], "purchase", float(item["qty"]), po["po_number"], user["id"]
+                    item["material_id"], "purchase", float(item["qty"]), po["po_number"], user["id"], tenant_id
                 )
         updates["received_at"] = now_iso()
 
-    await db.purchase_orders.update_one({"id": po_id}, {"$set": updates})
-    return await db.purchase_orders.find_one({"id": po_id}, {"_id": 0})
+    await db.purchase_orders.update_one(tenant_query(tenant_id, {"id": po_id}), {"$set": updates})
+    return await db.purchase_orders.find_one(tenant_query(tenant_id, {"id": po_id}), {"_id": 0})
 
 
 @router.delete("/purchase-orders/{po_id}")
 async def delete_po(po_id: str, user: dict = Depends(require_owner)):
-    po = await db.purchase_orders.find_one({"id": po_id})
+    tenant_id = get_tenant_id(user)
+    po = await db.purchase_orders.find_one(tenant_query(tenant_id, {"id": po_id}))
     if po and po.get("status") == PO_RECEIVED:
         raise HTTPException(status_code=400, detail="No puedes eliminar una orden recibida")
-    await db.purchase_orders.delete_one({"id": po_id})
+    await db.purchase_orders.delete_one(tenant_query(tenant_id, {"id": po_id}))
     return {"ok": True}
