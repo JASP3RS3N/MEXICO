@@ -14,9 +14,10 @@ from config import (
     gen_id,
     next_sequence,
     now_iso,
+    tenant_query,
 )
 from models import OrderCreate, PaymentRequest
-from security import get_current_user, require_roles
+from security import get_current_user, get_tenant_id, require_roles
 from orders_service import settle_order
 
 router = APIRouter()
@@ -25,8 +26,8 @@ ACTIVE_STATUSES = [ORDER_PENDING, ORDER_PREPARING, ORDER_READY, ORDER_DELIVERED]
 KITCHEN_STATUSES = [ORDER_PENDING, ORDER_PREPARING, ORDER_READY]
 
 
-async def _get_settings() -> dict:
-    s = await db.settings.find_one({"id": "settings"}, {"_id": 0})
+async def _get_settings(tenant_id: str) -> dict:
+    s = await db.settings.find_one(tenant_query(tenant_id, {"id": "settings"}), {"_id": 0})
     return s or {"tax_rate": 0.0, "tax_included": True, "currency": "MXN"}
 
 
@@ -55,18 +56,27 @@ def _public_order(order: dict) -> dict:
     }
 
 
+async def _resolve_tenant_by_slug(slug: str) -> str:
+    """Resolve a tenant slug to its id for public (unauthenticated) endpoints."""
+    tenant = await db.tenants.find_one({"slug": slug}, {"_id": 0})
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant no encontrado")
+    return tenant["id"]
+
+
 # ---------------------------------------------------------------------------
 # Creation (cashier / owner)
 # ---------------------------------------------------------------------------
 @router.post("/orders")
 async def create_order(payload: OrderCreate, user: dict = Depends(require_roles("cashier", "owner"))):
+    tenant_id = get_tenant_id(user)
     if not payload.items:
         raise HTTPException(status_code=400, detail="La orden necesita al menos un producto")
 
     items = []
     gross = 0.0
     for it in payload.items:
-        product = await db.products.find_one({"id": it.product_id}, {"_id": 0})
+        product = await db.products.find_one(tenant_query(tenant_id, {"id": it.product_id}), {"_id": 0})
         if not product:
             raise HTTPException(status_code=404, detail=f"Producto {it.product_id} no encontrado")
         if not product.get("active", True):
@@ -90,12 +100,13 @@ async def create_order(payload: OrderCreate, user: dict = Depends(require_roles(
             }
         )
 
-    settings = await _get_settings()
+    settings = await _get_settings(tenant_id)
     totals = _compute_totals(gross, settings)
-    seq = await next_sequence("order")
+    seq = await next_sequence("order", tenant_id)
 
     doc = {
         "id": gen_id(),
+        "tenant_id": tenant_id,
         "order_number": seq,
         "customer_name": (payload.customer_name or "").strip(),
         "table": (payload.table or "").strip(),
@@ -131,7 +142,8 @@ async def list_orders(
     limit: int = Query(100),
     user: dict = Depends(get_current_user),
 ):
-    query = {}
+    tenant_id = get_tenant_id(user)
+    query = tenant_query(tenant_id)
     if status:
         query["status"] = status
     elif active:
@@ -154,7 +166,8 @@ async def list_orders(
 
 @router.get("/orders/{order_id}")
 async def get_order(order_id: str, user: dict = Depends(get_current_user)):
-    order = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    tenant_id = get_tenant_id(user)
+    order = await db.orders.find_one(tenant_query(tenant_id, {"id": order_id}), {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Orden no encontrada")
     if user["role"] == "cashier" and order.get("paid"):
@@ -167,8 +180,9 @@ async def get_order(order_id: str, user: dict = Depends(get_current_user)):
 # ---------------------------------------------------------------------------
 @router.get("/kitchen")
 async def kitchen_queue(user: dict = Depends(require_roles("prep", "owner", "cashier"))):
+    tenant_id = get_tenant_id(user)
     orders = await db.orders.find(
-        {"status": {"$in": KITCHEN_STATUSES}}, {"_id": 0}
+        tenant_query(tenant_id, {"status": {"$in": KITCHEN_STATUSES}}), {"_id": 0}
     ).sort("created_at", 1).to_list(200)
     for o in orders:
         for i in o.get("items", []):
@@ -180,9 +194,10 @@ async def kitchen_queue(user: dict = Depends(require_roles("prep", "owner", "cas
 
 
 @router.get("/display/theme")
-async def display_theme():
+async def display_theme(tenant: str = Query(...)):
     """Public: colors + name for the client display screen (no auth, no prices)."""
-    s = await db.settings.find_one({"id": "settings"}, {"_id": 0}) or {}
+    tenant_id = await _resolve_tenant_by_slug(tenant)
+    s = await db.settings.find_one(tenant_query(tenant_id, {"id": "settings"}), {"_id": 0}) or {}
     return {
         "restaurant_name": s.get("restaurant_name", "Smokehouse"),
         "display_bg": s.get("display_bg", ""),
@@ -193,10 +208,11 @@ async def display_theme():
 
 
 @router.get("/display")
-async def client_display():
+async def client_display(tenant: str = Query(...)):
     """Public status board for customers — no authentication, no prices."""
+    tenant_id = await _resolve_tenant_by_slug(tenant)
     orders = await db.orders.find(
-        {"status": {"$in": KITCHEN_STATUSES}}, {"_id": 0}
+        tenant_query(tenant_id, {"status": {"$in": KITCHEN_STATUSES}}), {"_id": 0}
     ).sort("created_at", 1).to_list(100)
     return [_public_order(o) for o in orders]
 
@@ -204,49 +220,53 @@ async def client_display():
 # ---------------------------------------------------------------------------
 # Status transitions
 # ---------------------------------------------------------------------------
-async def _set_status(order_id: str, new_status: str, timestamp_field: str = None):
+async def _set_status(order_id: str, new_status: str, tenant_id: str, timestamp_field: str = None):
     updates = {"status": new_status}
     if timestamp_field:
         updates[timestamp_field] = now_iso()
-    res = await db.orders.update_one({"id": order_id}, {"$set": updates})
+    res = await db.orders.update_one(tenant_query(tenant_id, {"id": order_id}), {"$set": updates})
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail="Orden no encontrada")
-    return await db.orders.find_one({"id": order_id}, {"_id": 0})
+    return await db.orders.find_one(tenant_query(tenant_id, {"id": order_id}), {"_id": 0})
 
 
 @router.post("/orders/{order_id}/accept")
 async def accept_order(order_id: str, user: dict = Depends(require_roles("prep", "owner"))):
-    order = await db.orders.find_one({"id": order_id})
+    tenant_id = get_tenant_id(user)
+    order = await db.orders.find_one(tenant_query(tenant_id, {"id": order_id}))
     if not order:
         raise HTTPException(status_code=404, detail="Orden no encontrada")
     if order["status"] != ORDER_PENDING:
         raise HTTPException(status_code=400, detail="La orden no está pendiente")
-    return await _set_status(order_id, ORDER_PREPARING, "accepted_at")
+    return await _set_status(order_id, ORDER_PREPARING, tenant_id, "accepted_at")
 
 
 @router.post("/orders/{order_id}/ready")
 async def ready_order(order_id: str, user: dict = Depends(require_roles("prep", "owner"))):
-    order = await db.orders.find_one({"id": order_id})
+    tenant_id = get_tenant_id(user)
+    order = await db.orders.find_one(tenant_query(tenant_id, {"id": order_id}))
     if not order:
         raise HTTPException(status_code=404, detail="Orden no encontrada")
     if order["status"] not in (ORDER_PREPARING, ORDER_PENDING):
         raise HTTPException(status_code=400, detail="La orden no está en preparación")
-    return await _set_status(order_id, ORDER_READY, "ready_at")
+    return await _set_status(order_id, ORDER_READY, tenant_id, "ready_at")
 
 
 @router.post("/orders/{order_id}/deliver")
 async def deliver_order(order_id: str, user: dict = Depends(require_roles("prep", "cashier", "owner"))):
-    return await _set_status(order_id, ORDER_DELIVERED, "delivered_at")
+    tenant_id = get_tenant_id(user)
+    return await _set_status(order_id, ORDER_DELIVERED, tenant_id, "delivered_at")
 
 
 @router.post("/orders/{order_id}/cancel")
 async def cancel_order(order_id: str, user: dict = Depends(require_roles("cashier", "owner"))):
-    order = await db.orders.find_one({"id": order_id})
+    tenant_id = get_tenant_id(user)
+    order = await db.orders.find_one(tenant_query(tenant_id, {"id": order_id}))
     if not order:
         raise HTTPException(status_code=404, detail="Orden no encontrada")
     if order.get("paid"):
         raise HTTPException(status_code=400, detail="No puedes cancelar una orden ya cobrada")
-    return await _set_status(order_id, ORDER_CANCELLED)
+    return await _set_status(order_id, ORDER_CANCELLED, tenant_id)
 
 
 # ---------------------------------------------------------------------------
@@ -254,7 +274,8 @@ async def cancel_order(order_id: str, user: dict = Depends(require_roles("cashie
 # ---------------------------------------------------------------------------
 @router.post("/orders/{order_id}/pay")
 async def pay_order(order_id: str, payload: PaymentRequest, user: dict = Depends(require_roles("cashier", "owner"))):
-    order = await db.orders.find_one({"id": order_id})
+    tenant_id = get_tenant_id(user)
+    order = await db.orders.find_one(tenant_query(tenant_id, {"id": order_id}))
     if not order:
         raise HTTPException(status_code=404, detail="Orden no encontrada")
     if order.get("paid"):
