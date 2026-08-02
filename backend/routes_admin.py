@@ -51,7 +51,7 @@ async def create_tenant(payload: TenantCreate, admin: dict = Depends(require_sup
     await db.users.insert_one(owner)
 
     settings = {
-        "id": gen_id(),
+        "id": "settings",  # fixed key; tenant_id distinguishes each tenant's settings
         "tenant_id": tenant["id"],
         "restaurant_name": payload.name.strip(),
         "tax_rate": 0.16,
