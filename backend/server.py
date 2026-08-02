@@ -15,6 +15,7 @@ from config import (
     ROLE_CASHIER,
     ROLE_OWNER,
     ROLE_PREP,
+    ROLE_SUPERADMIN,
     client,
     db,
     gen_id,
@@ -29,6 +30,7 @@ import routes_finance
 import routes_ai
 import routes_people
 import routes_alerts
+import routes_admin
 
 logging.basicConfig(
     level=logging.INFO,
@@ -63,6 +65,9 @@ api_router.include_router(routes_alerts.router, tags=["alerts"])
 
 app.include_router(api_router)
 
+# Platform admin (tenant management) — superadmin only.
+app.include_router(routes_admin.router, prefix="/api/admin", tags=["admin"])
+
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
@@ -84,6 +89,26 @@ async def _ensure_indexes():
         await db.materials.create_index("name")
     except Exception as exc:  # noqa: BLE001 - index creation is best-effort
         logger.warning("No se pudieron crear índices: %s", exc)
+
+
+async def _seed_superadmin():
+    """Create the platform superadmin if none exists (no tenant)."""
+    if await db.users.count_documents({"role": ROLE_SUPERADMIN}) > 0:
+        return
+    await db.users.insert_one(
+        {
+            "id": gen_id(),
+            "username": "admin",
+            "name": "Super Admin",
+            "role": ROLE_SUPERADMIN,
+            "tenant_id": None,
+            "pin": None,
+            "password_hash": hash_password(os.environ.get("SUPERADMIN_PASSWORD", "admin123")),
+            "active": True,
+            "created_at": now_iso(),
+        }
+    )
+    logger.info("Superadmin creado (usuario: admin).")
 
 
 async def _seed_users():
@@ -207,6 +232,7 @@ async def startup():
     await _ensure_indexes()
     await _seed_settings()
     await _seed_users()
+    await _seed_superadmin()
     await _seed_catalog()
     logger.info("Smokehouse API lista.")
 
