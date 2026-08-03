@@ -5,7 +5,11 @@ import api from "@/lib/api";
 import { PageHeader } from "@/components/Layout";
 import { Btn, Card, Input, Field, Modal, EmptyState, PageLoader, Toggle } from "@/components/kit";
 
-const empty = { name: "", contact: "", phone: "", email: "", notes: "", active: true };
+const empty = {
+  name: "", contact: "", phone: "", email: "", notes: "",
+  rfc: "", razon_social: "", regimen_fiscal: "", codigo_postal_fiscal: "",
+  active: true,
+};
 
 export default function Suppliers() {
   const [items, setItems] = useState([]);
@@ -101,6 +105,12 @@ export default function Suppliers() {
               <Field label="Email"><Input value={modal.email} onChange={(e) => setModal({ ...modal, email: e.target.value })} /></Field>
             </div>
             <Field label="Notas"><Input value={modal.notes} onChange={(e) => setModal({ ...modal, notes: e.target.value })} /></Field>
+            <Field label="RFC"><Input value={modal.rfc || ""} onChange={(e) => setModal({ ...modal, rfc: e.target.value })} placeholder="RFC del proveedor" /></Field>
+            <Field label="Razón Social"><Input value={modal.razon_social || ""} onChange={(e) => setModal({ ...modal, razon_social: e.target.value })} /></Field>
+            <div className="grid grid-cols-2 gap-4">
+              <Field label="Régimen Fiscal"><Input value={modal.regimen_fiscal || ""} onChange={(e) => setModal({ ...modal, regimen_fiscal: e.target.value })} placeholder="ej. Régimen Simplificado de Confianza" /></Field>
+              <Field label="Código Postal Fiscal"><Input value={modal.codigo_postal_fiscal || ""} onChange={(e) => setModal({ ...modal, codigo_postal_fiscal: e.target.value })} maxLength={5} /></Field>
+            </div>
             {modal.id && <Toggle checked={modal.active !== false} onChange={(v) => setModal({ ...modal, active: v })} label="Activo" />}
           </div>
         )}

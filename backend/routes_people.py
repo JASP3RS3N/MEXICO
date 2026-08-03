@@ -34,6 +34,10 @@ async def create_supplier(payload: SupplierCreate, user: dict = Depends(require_
         "phone": payload.phone or "",
         "email": payload.email or "",
         "notes": payload.notes or "",
+        "rfc": payload.rfc or "",
+        "razon_social": payload.razon_social or "",
+        "regimen_fiscal": payload.regimen_fiscal or "",
+        "codigo_postal_fiscal": payload.codigo_postal_fiscal or "",
         "active": payload.active,
         "created_at": now_iso(),
     }

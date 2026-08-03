@@ -1,7 +1,7 @@
 """Pydantic request/response models for the Smokehouse API."""
 from typing import List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 # ---------------------------------------------------------------------------
@@ -189,13 +189,34 @@ class SettingsUpdate(BaseModel):
 # ---------------------------------------------------------------------------
 # Suppliers (proveedores)
 # ---------------------------------------------------------------------------
+def _normalize_rfc(value: Optional[str]) -> Optional[str]:
+    """Normalize/validate a Mexican RFC. Optional: None/empty passes as None."""
+    if value is None:
+        return value
+    value = value.upper().strip()
+    if not value:
+        return None
+    if not value.isalnum() or not 12 <= len(value) <= 13:
+        raise ValueError("RFC inválido, debe tener 12 o 13 caracteres")
+    return value
+
+
 class SupplierCreate(BaseModel):
     name: str
     contact: Optional[str] = ""
     phone: Optional[str] = ""
     email: Optional[str] = ""
     notes: Optional[str] = ""
+    rfc: Optional[str] = None
+    razon_social: Optional[str] = None
+    regimen_fiscal: Optional[str] = None
+    codigo_postal_fiscal: Optional[str] = None
     active: bool = True
+
+    @field_validator("rfc")
+    @classmethod
+    def _validate_rfc(cls, v):
+        return _normalize_rfc(v)
 
 
 class SupplierUpdate(BaseModel):
@@ -204,7 +225,16 @@ class SupplierUpdate(BaseModel):
     phone: Optional[str] = None
     email: Optional[str] = None
     notes: Optional[str] = None
+    rfc: Optional[str] = None
+    razon_social: Optional[str] = None
+    regimen_fiscal: Optional[str] = None
+    codigo_postal_fiscal: Optional[str] = None
     active: Optional[bool] = None
+
+    @field_validator("rfc")
+    @classmethod
+    def _validate_rfc(cls, v):
+        return _normalize_rfc(v)
 
 
 # ---------------------------------------------------------------------------
