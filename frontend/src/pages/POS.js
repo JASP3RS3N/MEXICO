@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Plus, Minus, Trash2, ShoppingCart, Send, CreditCard, Search, Banknote, ArrowRightLeft } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/lib/api";
@@ -30,6 +30,12 @@ export default function POS() {
   const [method, setMethod] = useState("efectivo");
   const [received, setReceived] = useState("");
   const [paying, setPaying] = useState(false);
+
+  // employee attribution (PIN)
+  const [soldByPin, setSoldByPin] = useState("");
+  const [pinModalOpen, setPinModalOpen] = useState(false);
+  const [pinInput, setPinInput] = useState("");
+  const pendingActionRef = useRef(null);
 
   useEffect(() => {
     Promise.all([api.get("/products"), api.get("/categories"), api.get("/settings")])
@@ -81,41 +87,84 @@ export default function POS() {
       ? { subtotal: gross - (gross - gross / (1 + rate)), tax: gross - gross / (1 + rate), total: gross }
       : { subtotal: gross, tax: gross * rate, total: gross + gross * rate };
 
-  const buildPayload = () => ({
+  const buildPayload = (pin = soldByPin) => ({
     items: cart.map((i) => ({ product_id: i.product.id, qty: i.qty, notes: i.notes })),
     customer_name: customer,
     table,
     order_type: orderType,
+    sold_by_pin: pin,
   });
 
-  const sendToKitchen = async () => {
+  const handleOrderError = (err, fallback) => {
+    const detail = err?.response?.data?.detail;
+    if (err?.response?.status === 400 && detail === "PIN de empleado no reconocido") {
+      toast.error(detail);
+      setSoldByPin("");   // wrong PIN → force a fresh entry, keep the cart
+      setPinInput("");
+      setPinModalOpen(true);
+      return;
+    }
+    toast.error(detail || fallback);
+  };
+
+  const sendToKitchen = async (pin = soldByPin) => {
     if (!cart.length) return;
     setSending(true);
     try {
-      const { data } = await api.post("/orders", buildPayload());
+      const { data } = await api.post("/orders", buildPayload(pin));
+      pendingActionRef.current = null;
       toast.success(`Comanda #${data.order_number} enviada a cocina`);
+      setSoldByPin("");   // next sale asks for the PIN again
       clearCart();
     } catch (err) {
-      toast.error(err?.response?.data?.detail || "No se pudo enviar la orden");
+      handleOrderError(err, "No se pudo enviar la orden");
     } finally {
       setSending(false);
     }
   };
 
-  const startCharge = async () => {
+  const startCharge = async (pin = soldByPin) => {
     if (!cart.length) return;
     setSending(true);
     try {
-      const { data } = await api.post("/orders", buildPayload());
+      const { data } = await api.post("/orders", buildPayload(pin));
+      pendingActionRef.current = null;
       setPayOrder(data);
       setReceived("");
       setMethod("efectivo");
       setPayOpen(true);
     } catch (err) {
-      toast.error(err?.response?.data?.detail || "No se pudo crear la orden");
+      handleOrderError(err, "No se pudo crear la orden");
     } finally {
       setSending(false);
     }
+  };
+
+  // Gate: every sale must be attributed to an employee PIN before it goes through.
+  // The action is remembered until the order actually succeeds, so a rejected PIN can retry.
+  const ensurePinThen = (action) => {
+    if (!cart.length) return;
+    pendingActionRef.current = action;
+    if (soldByPin) {
+      action(soldByPin);
+      return;
+    }
+    setPinInput("");
+    setPinModalOpen(true);
+  };
+
+  const confirmPin = () => {
+    const pin = pinInput.trim();
+    if (!pin) return toast.error("Ingresa el PIN del empleado");
+    setSoldByPin(pin);
+    setPinModalOpen(false);
+    const action = pendingActionRef.current;
+    if (action) action(pin);
+  };
+
+  const cancelPin = () => {
+    pendingActionRef.current = null;
+    setPinModalOpen(false);
   };
 
   const change =
@@ -136,6 +185,7 @@ export default function POS() {
       );
       setPayOpen(false);
       setPayOrder(null);
+      setSoldByPin("");   // next sale asks for the PIN again
       clearCart();
     } catch (err) {
       toast.error(err?.response?.data?.detail || "No se pudo cobrar");
@@ -289,10 +339,10 @@ export default function POS() {
             </div>
 
             <div className="grid grid-cols-2 gap-2">
-              <Btn variant="secondary" disabled={!cart.length} loading={sending} onClick={sendToKitchen}>
+              <Btn variant="secondary" disabled={!cart.length} loading={sending} onClick={() => ensurePinThen(sendToKitchen)}>
                 <Send className="h-4 w-4" /> A cocina
               </Btn>
-              <Btn variant="success" disabled={!cart.length} loading={sending} onClick={startCharge}>
+              <Btn variant="success" disabled={!cart.length} loading={sending} onClick={() => ensurePinThen(startCharge)}>
                 <CreditCard className="h-4 w-4" /> Cobrar
               </Btn>
             </div>
@@ -363,6 +413,38 @@ export default function POS() {
               )}
             </Field>
           )}
+        </div>
+      </Modal>
+
+      {/* Employee PIN modal — attributes the sale before it goes through */}
+      <Modal
+        open={pinModalOpen}
+        onClose={cancelPin}
+        title="PIN del empleado"
+        footer={
+          <>
+            <Btn variant="ghost" onClick={cancelPin}>
+              Cancelar
+            </Btn>
+            <Btn variant="success" onClick={confirmPin}>
+              Confirmar
+            </Btn>
+          </>
+        }
+      >
+        <div className="space-y-3">
+          <p className="text-sm text-textDim">Ingresa tu PIN para atribuir esta venta.</p>
+          <Input
+            type="number"
+            inputMode="numeric"
+            maxLength={6}
+            autoFocus
+            value={pinInput}
+            onChange={(e) => setPinInput(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && confirmPin()}
+            placeholder="••••"
+            className="text-center text-3xl font-mono tracking-[0.4em]"
+          />
         </div>
       </Modal>
     </div>

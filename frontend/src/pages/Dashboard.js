@@ -22,6 +22,7 @@ import {
   ShoppingBag,
   Wallet,
   Percent,
+  Trophy,
 } from "lucide-react";
 import api from "@/lib/api";
 import { PageHeader } from "@/components/Layout";
@@ -64,6 +65,7 @@ export default function Dashboard() {
   const [summary, setSummary] = useState(null);
   const [pnl, setPnl] = useState(null);
   const [daily, setDaily] = useState(null);
+  const [topSellers, setTopSellers] = useState(null);
   const [period, setPeriod] = useState("month");
   const [currency, setCurrency] = useState("MXN");
   const [loading, setLoading] = useState(true);
@@ -80,12 +82,14 @@ export default function Dashboard() {
       api.get("/finance/dashboard"),
       api.get("/finance/pnl", { params: range }),
       api.get("/finance/daily", { params: dayRange(new Date()) }),
+      api.get("/finance/top-sellers", { params: range }),
     ])
-      .then(([s, p, d]) => {
+      .then(([s, p, d, ts]) => {
         if (!alive) return;
         setSummary(s.data);
         setPnl(p.data);
         setDaily(d.data);
+        setTopSellers(ts.data);
       })
       .finally(() => alive && setLoading(false));
     return () => {
@@ -295,6 +299,40 @@ export default function Dashboard() {
             </div>
           ) : (
             <EmptyChart text="Sin ventas en el periodo" />
+          )}
+        </div>
+      </Card>
+
+      {/* Top sellers */}
+      <Card className="mt-6">
+        <CardHead title="Top vendedores del mes" subtitle="Ventas atribuidas por PIN de empleado" />
+        <div className="p-5">
+          {topSellers?.ranking?.length ? (
+            <div className="space-y-2">
+              {topSellers.ranking.map((s, i) => (
+                <div
+                  key={s.sold_by_user_id}
+                  className={`flex items-center gap-3 rounded-xl px-3 py-2 ${
+                    i === 0 ? "bg-amber-500/10 border border-amber-500/30" : ""
+                  }`}
+                >
+                  <span className="w-6 flex justify-center">
+                    {i === 0 ? (
+                      <Trophy className="h-4 w-4 text-amber-400" />
+                    ) : (
+                      <span className="text-textDim font-mono text-sm">{i + 1}</span>
+                    )}
+                  </span>
+                  <span className={`flex-1 text-sm truncate ${i === 0 ? "text-amber-200 font-semibold" : "text-textBright"}`}>
+                    {s.sold_by_name || "—"}
+                  </span>
+                  <Badge color="gray">{num(s.count)} ventas</Badge>
+                  <span className="w-24 text-right font-mono text-money text-sm">{money(s.total, currency)}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <EmptyChart text="Aún no hay ventas atribuidas a un empleado este mes" />
           )}
         </div>
       </Card>
