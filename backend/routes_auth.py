@@ -74,6 +74,11 @@ async def create_user(payload: UserCreate, user: dict = Depends(require_owner)):
     if await db.users.find_one({"username": username}):
         raise HTTPException(status_code=409, detail="El usuario ya existe")
 
+    if payload.pin is not None and await db.users.find_one(
+        tenant_query(tenant_id, {"pin": payload.pin, "active": True})
+    ):
+        raise HTTPException(status_code=409, detail="Este PIN ya está en uso por otro empleado")
+
     doc = {
         "id": gen_id(),
         "username": username,
@@ -95,6 +100,11 @@ async def update_user(user_id: str, payload: UserUpdate, user: dict = Depends(re
     target = await db.users.find_one(tenant_query(tenant_id, {"id": user_id}))
     if not target:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
+
+    if payload.pin is not None and await db.users.find_one(
+        tenant_query(tenant_id, {"pin": payload.pin, "active": True, "id": {"$ne": user_id}})
+    ):
+        raise HTTPException(status_code=409, detail="Este PIN ya está en uso por otro empleado")
 
     # Note: tenant_id is never part of `updates`, so it can't be changed here.
     updates = {}

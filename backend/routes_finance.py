@@ -145,6 +145,40 @@ async def profit_and_loss(
 
 
 # ---------------------------------------------------------------------------
+# Top sellers (ranking de ventas por empleado atribuido vía PIN)
+# ---------------------------------------------------------------------------
+@router.get("/finance/top-sellers")
+async def top_sellers(start: str = Query(None), end: str = Query(None), user: dict = Depends(require_owner)):
+    tenant_id = get_tenant_id(user)
+    start = start or _month_start_iso()
+    end = end or now_iso()
+
+    orders = await _paid_orders(start, end, tenant_id)
+    by_seller = defaultdict(lambda: {"count": 0, "total": 0.0, "sold_by_name": ""})
+    for o in orders:
+        uid = o.get("sold_by_user_id")
+        if not uid:
+            continue  # unattributed sales are excluded from the ranking
+        by_seller[uid]["count"] += 1
+        by_seller[uid]["total"] += float(o.get("total", 0))
+        by_seller[uid]["sold_by_name"] = o.get("sold_by_name", "") or by_seller[uid]["sold_by_name"]
+
+    ranking = sorted(
+        [
+            {
+                "sold_by_user_id": uid,
+                "sold_by_name": v["sold_by_name"],
+                "count": v["count"],
+                "total": round(v["total"], 2),
+            }
+            for uid, v in by_seller.items()
+        ],
+        key=lambda x: -x["total"],
+    )
+    return {"period": {"start": start, "end": end}, "ranking": ranking}
+
+
+# ---------------------------------------------------------------------------
 # Daily sales (venta del día)
 # ---------------------------------------------------------------------------
 @router.get("/finance/daily")

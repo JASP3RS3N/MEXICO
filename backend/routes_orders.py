@@ -100,6 +100,16 @@ async def create_order(payload: OrderCreate, user: dict = Depends(require_roles(
             }
         )
 
+    # Optional employee attribution by quick-access PIN.
+    sold_by_user_id = None
+    sold_by_name = ""
+    if payload.sold_by_pin:
+        seller = await db.users.find_one(tenant_query(tenant_id, {"pin": payload.sold_by_pin, "active": True}))
+        if not seller:
+            raise HTTPException(status_code=400, detail="PIN de empleado no reconocido")
+        sold_by_user_id = seller["id"]
+        sold_by_name = seller.get("name", "")
+
     settings = await _get_settings(tenant_id)
     totals = _compute_totals(gross, settings)
     seq = await next_sequence("order", tenant_id)
@@ -121,6 +131,8 @@ async def create_order(payload: OrderCreate, user: dict = Depends(require_roles(
         "payment_method": None,
         "created_by": user["id"],
         "created_by_name": user.get("name", ""),
+        "sold_by_user_id": sold_by_user_id,
+        "sold_by_name": sold_by_name,
         "created_at": now_iso(),
         "accepted_at": None,
         "ready_at": None,

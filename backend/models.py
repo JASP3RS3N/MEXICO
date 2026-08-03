@@ -1,4 +1,5 @@
 """Pydantic request/response models for the Smokehouse API."""
+import re
 from typing import List, Optional
 
 from pydantic import BaseModel, Field, field_validator
@@ -7,6 +8,21 @@ from pydantic import BaseModel, Field, field_validator
 # ---------------------------------------------------------------------------
 # Auth & users
 # ---------------------------------------------------------------------------
+_PIN_RE = re.compile(r"[0-9]{4,6}")
+
+
+def _normalize_pin(value: Optional[str]) -> Optional[str]:
+    """Normalize an optional quick-access PIN. None/empty passes as None; else 4-6 digits."""
+    if value is None:
+        return None
+    value = value.strip()
+    if not value:
+        return None
+    if not _PIN_RE.fullmatch(value):
+        raise ValueError("PIN debe ser numérico, de 4 a 6 dígitos")
+    return value
+
+
 class LoginRequest(BaseModel):
     username: str
     password: str
@@ -19,6 +35,11 @@ class UserCreate(BaseModel):
     role: str  # owner | cashier | prep
     pin: Optional[str] = None  # optional quick-access PIN
 
+    @field_validator("pin")
+    @classmethod
+    def _validate_pin(cls, v):
+        return _normalize_pin(v)
+
 
 class UserUpdate(BaseModel):
     name: Optional[str] = None
@@ -26,6 +47,11 @@ class UserUpdate(BaseModel):
     role: Optional[str] = None
     active: Optional[bool] = None
     pin: Optional[str] = None
+
+    @field_validator("pin")
+    @classmethod
+    def _validate_pin(cls, v):
+        return _normalize_pin(v)
 
 
 # ---------------------------------------------------------------------------
@@ -128,6 +154,7 @@ class OrderCreate(BaseModel):
     table: Optional[str] = ""
     order_type: str = "comer_aqui"  # comer_aqui | para_llevar
     notes: Optional[str] = ""
+    sold_by_pin: Optional[str] = None  # employee PIN to attribute the sale
 
 
 class OrderStatusUpdate(BaseModel):
