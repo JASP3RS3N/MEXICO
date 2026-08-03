@@ -6,7 +6,7 @@ import { PageHeader } from "@/components/Layout";
 import { Btn, Card, Input, Field, Modal, Badge, EmptyState, PageLoader } from "@/components/kit";
 import { money, fmtDate, todayInput } from "@/lib/format";
 
-const empty = { name: "", position: "", phone: "", email: "", wage: "", hire_date: "", notes: "" };
+const empty = { name: "", position: "", phone: "", email: "", wage: "", hire_date: "", notes: "", ine_photo: null, remove_ine_photo: false };
 const FILTERS = [
   { key: "all", label: "Todos" },
   { key: "active", label: "Activos" },
@@ -74,6 +74,28 @@ export default function Employees() {
     load();
   };
 
+  // Open the edit modal and lazy-load the (heavy) INE photo, kept out of the listing.
+  const openEdit = async (e) => {
+    setModal({ ...empty, ...e, wage: String(e.wage ?? ""), ine_photo: null });
+    try {
+      const { data } = await api.get(`/employees/${e.id}/ine-photo`);
+      if (data?.ine_photo) {
+        setModal((m) => (m && m.id === e.id ? { ...m, ine_photo: data.ine_photo } : m));
+      }
+    } catch {
+      /* photo is optional; ignore load errors */
+    }
+  };
+
+  const onPickIne = (file) => {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => setModal((m) => (m ? { ...m, ine_photo: reader.result, remove_ine_photo: false } : m));
+    reader.readAsDataURL(file);
+  };
+
+  const removeIne = () => setModal((m) => (m ? { ...m, ine_photo: null, remove_ine_photo: true } : m));
+
   if (loading) return <PageLoader />;
 
   return (
@@ -125,7 +147,7 @@ export default function Employees() {
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1 justify-end">
-                        <button onClick={() => setModal({ ...empty, ...e, wage: String(e.wage ?? "") })} className="text-textDim hover:text-amber-400 p-1.5" title="Editar"><Pencil className="h-4 w-4" /></button>
+                        <button onClick={() => openEdit(e)} className="text-textDim hover:text-amber-400 p-1.5" title="Editar"><Pencil className="h-4 w-4" /></button>
                         {e.status === "active" ? (
                           <button onClick={() => setTerm({ id: e.id, name: e.name, reason: "", date: todayInput() })} className="text-textDim hover:text-red-400 p-1.5" title="Dar de baja"><UserMinus className="h-4 w-4" /></button>
                         ) : (
@@ -158,6 +180,20 @@ export default function Employees() {
             </div>
             {!modal.id && <Field label="Fecha de ingreso"><Input type="date" value={modal.hire_date} onChange={(e) => setModal({ ...modal, hire_date: e.target.value })} /></Field>}
             <Field label="Notas"><Input value={modal.notes} onChange={(e) => setModal({ ...modal, notes: e.target.value })} /></Field>
+            <Field label="Foto de INE (opcional)">
+              <input
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                onChange={(e) => onPickIne(e.target.files?.[0])}
+                className="block w-full text-sm text-textMain file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:bg-surface2 file:text-textMain hover:file:bg-surface2/70"
+              />
+              {modal.ine_photo && (
+                <div className="mt-3 flex items-center gap-3">
+                  <img src={modal.ine_photo} alt="INE" className="h-24 rounded-lg border border-border object-cover" />
+                  <Btn variant="ghost" onClick={removeIne}>Quitar foto</Btn>
+                </div>
+              )}
+            </Field>
           </div>
         )}
       </Modal>

@@ -69,7 +69,10 @@ async def delete_supplier(supplier_id: str, user: dict = Depends(require_owner))
 async def list_employees(status: str = None, user: dict = Depends(require_owner)):
     tenant_id = get_tenant_id(user)
     extra = {"status": status} if status in ("active", "inactive") else {}
-    return await db.employees.find(tenant_query(tenant_id, extra), {"_id": 0}).sort("created_at", -1).to_list(2000)
+    # ine_photo is heavy + sensitive: never travels in the listing (fetch it per-employee).
+    return await db.employees.find(
+        tenant_query(tenant_id, extra), {"_id": 0, "ine_photo": 0}
+    ).sort("created_at", -1).to_list(2000)
 
 
 @router.post("/employees")
@@ -84,6 +87,7 @@ async def create_employee(payload: EmployeeCreate, user: dict = Depends(require_
         "email": payload.email or "",
         "wage": float(payload.wage or 0),
         "notes": payload.notes or "",
+        "ine_photo": payload.ine_photo,
         "hire_date": payload.hire_date or now_iso()[:10],
         "termination_date": None,
         "termination_reason": None,
@@ -97,11 +101,27 @@ async def create_employee(payload: EmployeeCreate, user: dict = Depends(require_
 @router.put("/employees/{employee_id}")
 async def update_employee(employee_id: str, payload: EmployeeUpdate, user: dict = Depends(require_owner)):
     tenant_id = get_tenant_id(user)
-    updates = {k: v for k, v in payload.model_dump(exclude_unset=True).items() if v is not None}
+    data = payload.model_dump(exclude_unset=True)
+    remove_photo = data.pop("remove_ine_photo", False)  # control flag, not a stored field
+    updates = {k: v for k, v in data.items() if v is not None}
+    if remove_photo:
+        updates["ine_photo"] = None  # takes priority over any new ine_photo in the same payload
     res = await db.employees.update_one(tenant_query(tenant_id, {"id": employee_id}), {"$set": updates})
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail="Empleado no encontrado")
     return await db.employees.find_one(tenant_query(tenant_id, {"id": employee_id}), {"_id": 0})
+
+
+@router.get("/employees/{employee_id}/ine-photo")
+async def get_employee_ine_photo(employee_id: str, user: dict = Depends(require_owner)):
+    """Return the employee's INE photo on demand (owner only, tenant-scoped)."""
+    tenant_id = get_tenant_id(user)
+    emp = await db.employees.find_one(
+        tenant_query(tenant_id, {"id": employee_id}), {"_id": 0, "ine_photo": 1}
+    )
+    if not emp:
+        raise HTTPException(status_code=404, detail="Empleado no encontrado")
+    return {"ine_photo": emp.get("ine_photo")}
 
 
 @router.post("/employees/{employee_id}/terminate")

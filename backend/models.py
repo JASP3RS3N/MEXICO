@@ -240,6 +240,21 @@ class SupplierUpdate(BaseModel):
 # ---------------------------------------------------------------------------
 # Employees (control de empleados, altas/bajas con historial)
 # ---------------------------------------------------------------------------
+_INE_PHOTO_PREFIXES = ("data:image/jpeg", "data:image/png", "data:image/webp")
+_MAX_INE_PHOTO_CHARS = int(3.5 * 1024 * 1024)  # ~3.5 MB base64 ≈ 2.5 MB real image
+
+
+def _normalize_ine_photo(value: Optional[str]) -> Optional[str]:
+    """Validate an optional INE photo: base64 data URI (JPEG/PNG/WEBP), size-capped."""
+    if not value:
+        return None
+    if not value.startswith(_INE_PHOTO_PREFIXES):
+        raise ValueError("Formato de imagen inválido, debe ser JPEG, PNG o WEBP")
+    if len(value) > _MAX_INE_PHOTO_CHARS:
+        raise ValueError("La imagen es demasiado grande, máximo 2.5MB")
+    return value
+
+
 class EmployeeCreate(BaseModel):
     name: str
     position: Optional[str] = ""  # puesto: cajera, cocina, mesero…
@@ -248,6 +263,12 @@ class EmployeeCreate(BaseModel):
     hire_date: Optional[str] = None  # ISO date; defaults to today
     wage: Optional[float] = 0.0
     notes: Optional[str] = ""
+    ine_photo: Optional[str] = None  # base64 data URI (JPEG/PNG/WEBP)
+
+    @field_validator("ine_photo")
+    @classmethod
+    def _validate_ine_photo(cls, v):
+        return _normalize_ine_photo(v)
 
 
 class EmployeeUpdate(BaseModel):
@@ -257,6 +278,13 @@ class EmployeeUpdate(BaseModel):
     email: Optional[str] = None
     wage: Optional[float] = None
     notes: Optional[str] = None
+    ine_photo: Optional[str] = None
+    remove_ine_photo: Optional[bool] = False  # control flag: clear the stored photo
+
+    @field_validator("ine_photo")
+    @classmethod
+    def _validate_ine_photo(cls, v):
+        return _normalize_ine_photo(v)
 
 
 class EmployeeTerminate(BaseModel):
