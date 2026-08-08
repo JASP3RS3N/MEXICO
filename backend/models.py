@@ -28,6 +28,10 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class PinLoginRequest(BaseModel):
+    pin: str
+
+
 class UserCreate(BaseModel):
     username: str
     name: str

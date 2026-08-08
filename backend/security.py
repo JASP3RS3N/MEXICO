@@ -49,6 +49,19 @@ def create_token(user: dict) -> str:
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
 
+def create_pin_session_token(user: dict) -> str:
+    """Short-lived token for a PIN-initiated session (a device swapping identities)."""
+    payload = {
+        "sub": user["id"],
+        "username": user["username"],
+        "role": user["role"],
+        "tenant_id": user.get("tenant_id"),
+        "pin_session": True,
+        "exp": now() + timedelta(hours=2),  # a PIN session must not last all day
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+
 def decode_token(token: str) -> dict:
     return jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
 
@@ -94,6 +107,15 @@ def require_roles(*roles: str):
         return user
 
     return guard
+
+
+async def require_pin_session(user: dict = Depends(get_current_user)) -> dict:
+    """Semantic alias for routes that expect a PIN-initiated session.
+
+    PIN and normal tokens are both valid JWTs resolved by get_current_user, so
+    this adds no extra check today — it just documents intent for future routes.
+    """
+    return user
 
 
 # Owner is the only role allowed to see finances / daily sales.

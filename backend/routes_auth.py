@@ -1,9 +1,12 @@
 """Authentication and user management routes."""
 import asyncio
+from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from config import (
+    PIN_LOCKOUT_MINUTES,
+    PIN_MAX_ATTEMPTS,
     ROLE_CASHIER,
     ROLE_LABELS,
     ROLE_OWNER,
@@ -14,12 +17,14 @@ from config import (
     db,
     gen_id,
     generate_unique_pin,
+    now,
     now_iso,
     send_pin_email,
     tenant_query,
 )
-from models import LoginRequest, UserCreate, UserUpdate
+from models import LoginRequest, PinLoginRequest, UserCreate, UserUpdate
 from security import (
+    create_pin_session_token,
     create_token,
     get_current_user,
     get_tenant_id,
@@ -66,6 +71,70 @@ async def me(user: dict = Depends(get_current_user)):
     return {
         "user": await _with_tenant_slug(public_user(user)),
         "role_label": ROLE_LABELS.get(user["role"], user["role"]),
+    }
+
+
+# In-memory brute-force guard for the direct PIN endpoint:
+# (tenant_id, ip) -> {"count": int, "locked_until": datetime | None}.
+# Intentionally not persisted — it's a short-lived, best-effort throttle.
+_pin_login_attempts: dict = {}
+
+
+def _pin_locked_in_future(locked_until) -> bool:
+    """True if a stored pin_locked_until timestamp is still in the future."""
+    if not locked_until:
+        return False
+    lu = locked_until
+    if isinstance(lu, str):
+        try:
+            lu = datetime.fromisoformat(lu)
+        except ValueError:
+            return False
+    if lu.tzinfo is None:
+        lu = lu.replace(tzinfo=timezone.utc)
+    return lu > now()
+
+
+@router.post("/auth/login-pin")
+async def login_pin(payload: PinLoginRequest, request: Request, user: dict = Depends(get_current_user)):
+    """Device identity swap: a device already logged in normally activates a
+    cashier/prep session by PIN, scoped to that device's tenant — no URL needed."""
+    tenant_id = get_tenant_id(user)
+    ip = request.client.host if request.client else "unknown"
+    key = (tenant_id, ip)
+
+    # IP + tenant brute-force lock (a wrong PIN identifies no user, so we throttle here).
+    state = _pin_login_attempts.get(key)
+    if state and state.get("locked_until") and state["locked_until"] > now():
+        raise HTTPException(status_code=423, detail="Demasiados intentos, intenta más tarde")
+
+    target = await db.users.find_one(
+        tenant_query(tenant_id, {"pin": payload.pin, "active": True, "role": {"$in": [ROLE_CASHIER, ROLE_PREP]}})
+    )
+    if not target:
+        st = _pin_login_attempts.setdefault(key, {"count": 0, "locked_until": None})
+        st["count"] += 1
+        if st["count"] >= PIN_MAX_ATTEMPTS:
+            st["locked_until"] = now() + timedelta(minutes=PIN_LOCKOUT_MINUTES)
+            st["count"] = 0
+        # Do not reveal whether the PIN exists in another tenant.
+        raise HTTPException(status_code=401, detail="PIN incorrecto")
+
+    if _pin_locked_in_future(target.get("pin_locked_until")):
+        raise HTTPException(status_code=423, detail="PIN bloqueado temporalmente, intenta más tarde")
+
+    # Correct PIN: clear the per-user counters and this IP's failed streak.
+    await db.users.update_one(
+        tenant_query(tenant_id, {"id": target["id"]}),
+        {"$set": {"pin_failed_attempts": 0, "pin_locked_until": None}},
+    )
+    _pin_login_attempts.pop(key, None)
+
+    token = create_pin_session_token(target)
+    return {
+        "token": token,
+        "user": public_user(clean(target)),
+        "role_label": ROLE_LABELS.get(target["role"], target["role"]),
     }
 
 

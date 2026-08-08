@@ -34,6 +34,10 @@ JWT_SECRET = os.environ.get("JWT_SECRET", "change-me-in-prod-smokehouse-secret")
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRE_HOURS = int(os.environ.get("JWT_EXPIRE_HOURS", "12"))
 
+# PIN login throttling (per IP + tenant for the direct PIN endpoint).
+PIN_MAX_ATTEMPTS = 5
+PIN_LOCKOUT_MINUTES = 15
+
 CORS_ORIGINS = os.environ.get("CORS_ORIGINS", "*").split(",")
 
 # ---------------------------------------------------------------------------
