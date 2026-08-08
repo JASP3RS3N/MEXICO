@@ -179,8 +179,16 @@ class PurchaseOrderCreate(BaseModel):
     expected_date: Optional[str] = None
 
 
+class POReceiveItem(BaseModel):
+    material_id: str
+    received_qty: float
+
+
 class POStatusUpdate(BaseModel):
     status: str  # ordered | received | cancelled
+    # Only used when status == "received": the actual quantity received per
+    # item, which may differ from the quantity originally ordered.
+    received_items: Optional[List[POReceiveItem]] = None
 
 
 # ---------------------------------------------------------------------------

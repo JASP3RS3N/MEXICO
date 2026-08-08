@@ -1,4 +1,6 @@
 """Raw materials (materia prima) master data + purchase orders."""
+import math
+
 from fastapi import APIRouter, Depends, HTTPException
 
 from config import (
@@ -148,7 +150,9 @@ async def po_suggestions(user: dict = Depends(require_owner)):
         if current <= minimum:
             moq = float(m.get("min_order", 0))
             suggested = max(par - current, 0) or (par or minimum or 1)
-            suggested = max(suggested, moq)  # never below the minimum order quantity
+            # Round up to the nearest multiple of the minimum order quantity.
+            if moq > 0:
+                suggested = math.ceil(suggested / moq) * moq
             suggestions.append(
                 {
                     "material_id": m["id"],
@@ -172,20 +176,32 @@ async def create_po(payload: PurchaseOrderCreate, user: dict = Depends(require_o
         raise HTTPException(status_code=400, detail="La orden de compra necesita al menos un artículo")
 
     items = []
+    adjustments = []
     total = 0.0
     for it in payload.items:
         mat = await db.materials.find_one(tenant_query(tenant_id, {"id": it.material_id}), {"_id": 0})
         if not mat:
             raise HTTPException(status_code=404, detail=f"Materia prima {it.material_id} no encontrada")
+
+        # Enforce the minimum order quantity: round up to its nearest multiple
+        # instead of rejecting the order, and record what was bumped so the
+        # owner can be told what changed and why.
+        qty = float(it.qty)
+        moq = float(mat.get("min_order", 0))
+        if moq > 0 and qty % moq != 0:
+            adjusted = math.ceil(qty / moq) * moq
+            adjustments.append({"name": mat["name"], "original_qty": qty, "adjusted_qty": adjusted, "min_order": moq})
+            qty = adjusted
+
         unit_cost = float(it.unit_cost if it.unit_cost is not None else mat.get("cost_per_unit", 0))
-        subtotal = round(unit_cost * float(it.qty), 2)
+        subtotal = round(unit_cost * qty, 2)
         total += subtotal
         items.append(
             {
                 "material_id": mat["id"],
                 "name": mat["name"],
                 "unit": mat["unit"],
-                "qty": float(it.qty),
+                "qty": qty,
                 "unit_cost": unit_cost,
                 "subtotal": subtotal,
             }
@@ -208,7 +224,8 @@ async def create_po(payload: PurchaseOrderCreate, user: dict = Depends(require_o
         "received_at": None,
     }
     await db.purchase_orders.insert_one(doc)
-    return clean(doc)
+    # Surface any MOQ round-ups so the frontend can warn the owner.
+    return {**clean(doc), "adjustments": adjustments}
 
 
 @router.put("/purchase-orders/{po_id}/status")
@@ -226,10 +243,16 @@ async def update_po_status(po_id: str, payload: POStatusUpdate, user: dict = Dep
 
     # Receiving a PO increases stock and updates the material's last cost.
     if payload.status == PO_RECEIVED:
+        # The actual quantity received per material may differ from what was
+        # ordered; fall back to the ordered qty when not provided (back-compat).
+        # No MOQ validation on receiving — the supplier may send any amount.
+        received_map = {ri.material_id: float(ri.received_qty) for ri in (payload.received_items or [])}
+        received_items = []
         for item in po["items"]:
+            actual_qty = received_map.get(item["material_id"], float(item["qty"]))
             mat = await db.materials.find_one(tenant_query(tenant_id, {"id": item["material_id"]}))
             if mat:
-                new_stock = float(mat.get("current_stock", 0)) + float(item["qty"])
+                new_stock = float(mat.get("current_stock", 0)) + actual_qty
                 await db.materials.update_one(
                     tenant_query(tenant_id, {"id": item["material_id"]}),
                     {"$set": {
@@ -239,8 +262,11 @@ async def update_po_status(po_id: str, payload: POStatusUpdate, user: dict = Dep
                     }},
                 )
                 await _record_movement(
-                    item["material_id"], "purchase", float(item["qty"]), po["po_number"], user["id"], tenant_id
+                    item["material_id"], "purchase", actual_qty, po["po_number"], user["id"], tenant_id
                 )
+            # Keep ordered vs received traceability on the PO item itself.
+            received_items.append({**item, "received_qty": actual_qty})
+        updates["items"] = received_items
         updates["received_at"] = now_iso()
 
     await db.purchase_orders.update_one(tenant_query(tenant_id, {"id": po_id}), {"$set": updates})
