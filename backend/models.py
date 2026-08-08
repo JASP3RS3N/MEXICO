@@ -2,7 +2,7 @@
 import re
 from typing import List, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 
 # ---------------------------------------------------------------------------
@@ -33,12 +33,7 @@ class UserCreate(BaseModel):
     name: str
     password: str
     role: str  # owner | cashier | prep
-    pin: Optional[str] = None  # optional quick-access PIN
-
-    @field_validator("pin")
-    @classmethod
-    def _validate_pin(cls, v):
-        return _normalize_pin(v)
+    email: Optional[EmailStr] = None  # PIN is always generated server-side
 
 
 class UserUpdate(BaseModel):
@@ -46,12 +41,7 @@ class UserUpdate(BaseModel):
     password: Optional[str] = None
     role: Optional[str] = None
     active: Optional[bool] = None
-    pin: Optional[str] = None
-
-    @field_validator("pin")
-    @classmethod
-    def _validate_pin(cls, v):
-        return _normalize_pin(v)
+    email: Optional[EmailStr] = None
 
 
 # ---------------------------------------------------------------------------

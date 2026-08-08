@@ -1,7 +1,23 @@
 """Authentication and user management routes."""
+import asyncio
+
 from fastapi import APIRouter, Depends, HTTPException
 
-from config import ROLE_LABELS, ROLE_SUPERADMIN, ROLES, clean, db, gen_id, now_iso, tenant_query
+from config import (
+    ROLE_CASHIER,
+    ROLE_LABELS,
+    ROLE_OWNER,
+    ROLE_PREP,
+    ROLE_SUPERADMIN,
+    ROLES,
+    clean,
+    db,
+    gen_id,
+    generate_unique_pin,
+    now_iso,
+    send_pin_email,
+    tenant_query,
+)
 from models import LoginRequest, UserCreate, UserUpdate
 from security import (
     create_token,
@@ -59,8 +75,15 @@ async def me(user: dict = Depends(get_current_user)):
 @router.get("/users")
 async def list_users(user: dict = Depends(require_owner)):
     tenant_id = get_tenant_id(user)
-    users = await db.users.find(tenant_query(tenant_id), {"_id": 0}).to_list(500)
+    # Never expose the PIN in the listing; owners fetch it on demand per user.
+    users = await db.users.find(tenant_query(tenant_id), {"_id": 0, "pin": 0}).to_list(500)
     return [public_user(u) for u in users]
+
+
+def _send_pin_email_async(email: str, name: str, pin: str, role: str) -> None:
+    """Fire-and-forget PIN email so an SMTP hiccup never blocks the request."""
+    loop = asyncio.get_event_loop()
+    loop.run_in_executor(None, send_pin_email, email, name, pin, ROLE_LABELS.get(role, role))
 
 
 @router.post("/users")
@@ -74,10 +97,10 @@ async def create_user(payload: UserCreate, user: dict = Depends(require_owner)):
     if await db.users.find_one({"username": username}):
         raise HTTPException(status_code=409, detail="El usuario ya existe")
 
-    if payload.pin is not None and await db.users.find_one(
-        tenant_query(tenant_id, {"pin": payload.pin, "active": True})
-    ):
-        raise HTTPException(status_code=409, detail="Este PIN ya está en uso por otro empleado")
+    # PIN is generated server-side for cashier/prep; owners never use a PIN.
+    pin = None
+    if payload.role in (ROLE_CASHIER, ROLE_PREP):
+        pin = await generate_unique_pin(tenant_id)
 
     doc = {
         "id": gen_id(),
@@ -85,13 +108,23 @@ async def create_user(payload: UserCreate, user: dict = Depends(require_owner)):
         "name": payload.name.strip(),
         "role": payload.role,
         "tenant_id": tenant_id,  # inherits the owner's tenant
-        "pin": payload.pin,
+        "email": payload.email,
+        "pin": pin,
         "password_hash": hash_password(payload.password),
         "active": True,
         "created_at": now_iso(),
     }
+    if pin is not None:
+        doc["pin_failed_attempts"] = 0
+        doc["pin_locked_until"] = None
     await db.users.insert_one(doc)
-    return public_user(clean(doc))
+
+    # Best-effort email; the PIN is always returned below as the fallback.
+    if payload.email and pin is not None:
+        _send_pin_email_async(payload.email, doc["name"], pin, payload.role)
+
+    # public_user strips the PIN, but the create response returns it once as the fallback copy.
+    return {**public_user(clean(doc)), "pin": pin}
 
 
 @router.put("/users/{user_id}")
@@ -100,11 +133,6 @@ async def update_user(user_id: str, payload: UserUpdate, user: dict = Depends(re
     target = await db.users.find_one(tenant_query(tenant_id, {"id": user_id}))
     if not target:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
-
-    if payload.pin is not None and await db.users.find_one(
-        tenant_query(tenant_id, {"pin": payload.pin, "active": True, "id": {"$ne": user_id}})
-    ):
-        raise HTTPException(status_code=409, detail="Este PIN ya está en uso por otro empleado")
 
     # Note: tenant_id is never part of `updates`, so it can't be changed here.
     updates = {}
@@ -118,8 +146,8 @@ async def update_user(user_id: str, payload: UserUpdate, user: dict = Depends(re
         updates["role"] = payload.role
     if payload.active is not None:
         updates["active"] = payload.active
-    if payload.pin is not None:
-        updates["pin"] = payload.pin
+    if payload.email is not None:
+        updates["email"] = payload.email
     if payload.password:
         updates["password_hash"] = hash_password(payload.password)
 
@@ -137,8 +165,41 @@ async def update_user(user_id: str, payload: UserUpdate, user: dict = Depends(re
 
     if updates:
         await db.users.update_one(tenant_query(tenant_id, {"id": user_id}), {"$set": updates})
-    fresh = await db.users.find_one(tenant_query(tenant_id, {"id": user_id}), {"_id": 0})
+    fresh = await db.users.find_one(tenant_query(tenant_id, {"id": user_id}), {"_id": 0, "pin": 0})
     return public_user(fresh)
+
+
+@router.get("/users/{user_id}/pin")
+async def get_user_pin(user_id: str, user: dict = Depends(require_owner)):
+    """Owner-only: reveal an employee's current PIN on demand."""
+    tenant_id = get_tenant_id(user)
+    target = await db.users.find_one(tenant_query(tenant_id, {"id": user_id}), {"_id": 0, "pin": 1})
+    if not target:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    return {"pin": target.get("pin")}
+
+
+@router.post("/users/{user_id}/regenerate-pin")
+async def regenerate_user_pin(user_id: str, user: dict = Depends(require_owner)):
+    """Owner-only: issue a new PIN for a cashier/prep user (and email it if possible)."""
+    tenant_id = get_tenant_id(user)
+    target = await db.users.find_one(tenant_query(tenant_id, {"id": user_id}))
+    if not target:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    if target["role"] == ROLE_OWNER:
+        raise HTTPException(status_code=400, detail="Los dueños no usan PIN")
+
+    pin = await generate_unique_pin(tenant_id)
+    await db.users.update_one(
+        tenant_query(tenant_id, {"id": user_id}),
+        {"$set": {"pin": pin, "pin_failed_attempts": 0, "pin_locked_until": None}},
+    )
+
+    # Best-effort email; the PIN is always returned below as the fallback.
+    if target.get("email"):
+        _send_pin_email_async(target["email"], target.get("name", ""), pin, target["role"])
+
+    return {"pin": pin}
 
 
 @router.delete("/users/{user_id}")

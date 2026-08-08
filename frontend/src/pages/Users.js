@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Plus, Users as UsersIcon, Pencil, Trash2, ShieldCheck } from "lucide-react";
+import { Plus, Users as UsersIcon, Pencil, Trash2, ShieldCheck, KeyRound } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/lib/api";
 import { useAuth, ROLE_LABELS } from "@/context/AuthContext";
@@ -19,6 +19,7 @@ export default function Users() {
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [pinResult, setPinResult] = useState(null);
 
   const load = async () => {
     try {
@@ -35,7 +36,7 @@ export default function Users() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const openNew = () => setModal({ username: "", name: "", role: "cashier", password: "", active: true });
+  const openNew = () => setModal({ username: "", name: "", role: "cashier", password: "", active: true, email: "" });
   const openEdit = (u) => setModal({ ...u, password: "" });
 
   const save = async () => {
@@ -44,19 +45,40 @@ export default function Users() {
     setSaving(true);
     try {
       if (modal.id) {
-        const body = { name: modal.name, role: modal.role, active: modal.active };
+        const body = { name: modal.name, role: modal.role, active: modal.active, email: modal.email || null };
         if (modal.password) body.password = modal.password;
         await api.put(`/users/${modal.id}`, body);
+        toast.success("Usuario guardado");
+        setModal(null);
+        load();
       } else {
-        await api.post("/users", { username: modal.username, name: modal.name, role: modal.role, password: modal.password });
+        const { data } = await api.post("/users", {
+          username: modal.username,
+          name: modal.name,
+          role: modal.role,
+          password: modal.password,
+          email: modal.email || null,
+        });
+        toast.success("Usuario guardado");
+        setModal(null);
+        load();
+        // cashier/prep get a server-generated PIN; show it as the fallback copy.
+        if (data?.pin) setPinResult({ pin: data.pin, email: data.email, name: data.name });
       }
-      toast.success("Usuario guardado");
-      setModal(null);
-      load();
     } catch (err) {
       toast.error(err?.response?.data?.detail || "No se pudo guardar");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const regeneratePin = async (u) => {
+    if (!window.confirm("¿Regenerar el PIN? El PIN anterior dejará de funcionar.")) return;
+    try {
+      const { data } = await api.post(`/users/${u.id}/regenerate-pin`);
+      if (data?.pin) setPinResult({ pin: data.pin, email: u.email, name: u.name });
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || "No se pudo regenerar el PIN");
     }
   };
 
@@ -111,9 +133,12 @@ export default function Users() {
                   {u.active === false ? "Inactivo" : "Activo"}
                 </span>
                 <div className="flex gap-1">
-                  <button onClick={() => openEdit(u)} className="text-textDim hover:text-amber-400 p-1.5"><Pencil className="h-4 w-4" /></button>
+                  {(u.role === "cashier" || u.role === "prep") && (
+                    <button onClick={() => regeneratePin(u)} className="text-textDim hover:text-cyan p-1.5" title="Regenerar PIN"><KeyRound className="h-4 w-4" /></button>
+                  )}
+                  <button onClick={() => openEdit(u)} className="text-textDim hover:text-amber-400 p-1.5" title="Editar"><Pencil className="h-4 w-4" /></button>
                   {u.id !== me?.id && (
-                    <button onClick={() => remove(u)} className="text-textDim hover:text-red-400 p-1.5"><Trash2 className="h-4 w-4" /></button>
+                    <button onClick={() => remove(u)} className="text-textDim hover:text-red-400 p-1.5" title="Eliminar"><Trash2 className="h-4 w-4" /></button>
                   )}
                 </div>
               </div>
@@ -144,7 +169,31 @@ export default function Users() {
             <Field label={modal.id ? "Nueva contraseña (opcional)" : "Contraseña"}>
               <Input type="password" value={modal.password} onChange={(e) => setModal({ ...modal, password: e.target.value })} placeholder={modal.id ? "Dejar en blanco para no cambiar" : ""} />
             </Field>
+            <Field label="Email (opcional)" hint="Cajera/Preparación reciben su PIN por correo">
+              <Input type="email" value={modal.email || ""} onChange={(e) => setModal({ ...modal, email: e.target.value })} placeholder="empleado@correo.com" />
+            </Field>
             {modal.id && <Toggle checked={modal.active !== false} onChange={(v) => setModal({ ...modal, active: v })} label="Usuario activo" />}
+          </div>
+        )}
+      </Modal>
+
+      <Modal
+        open={!!pinResult}
+        onClose={() => setPinResult(null)}
+        title="PIN de acceso generado"
+        footer={<Btn onClick={() => setPinResult(null)}>Entendido</Btn>}
+      >
+        {pinResult && (
+          <div className="space-y-4 text-center">
+            <p className="text-sm text-textDim">PIN de {pinResult.name}</p>
+            <p className="text-5xl font-black font-mono tracking-[0.3em] text-money">{pinResult.pin}</p>
+            {pinResult.email ? (
+              <p className="text-xs text-textDim">
+                También se envió por correo a {pinResult.email} (si no le llega, puedes dárselo directo con este PIN).
+              </p>
+            ) : (
+              <p className="text-xs text-textDim">Anótalo y compártelo con el empleado — este PIN en pantalla es el respaldo.</p>
+            )}
           </div>
         )}
       </Modal>

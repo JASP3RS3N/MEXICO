@@ -5,8 +5,11 @@ helpers used across the API modules. Kept intentionally dependency-light so it
 can be imported from every router without circular imports.
 """
 import os
+import secrets
+import smtplib
 import uuid
 from datetime import datetime, timezone
+from email.mime.text import MIMEText
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -32,6 +35,15 @@ JWT_ALGORITHM = "HS256"
 JWT_EXPIRE_HOURS = int(os.environ.get("JWT_EXPIRE_HOURS", "12"))
 
 CORS_ORIGINS = os.environ.get("CORS_ORIGINS", "*").split(",")
+
+# ---------------------------------------------------------------------------
+# Email (SMTP) — optional, used to send access PINs to employees
+# ---------------------------------------------------------------------------
+SMTP_HOST = os.environ.get("SMTP_HOST", "")
+SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
+SMTP_USER = os.environ.get("SMTP_USER", "")
+SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
+SMTP_FROM_NAME = os.environ.get("SMTP_FROM_NAME", "Smokehouse OS")
 
 # ---------------------------------------------------------------------------
 # Domain constants
@@ -114,3 +126,38 @@ def tenant_query(tenant_id: str, extra: dict = None) -> dict:
     if extra:
         q.update(extra)
     return q
+
+
+async def generate_unique_pin(tenant_id: str) -> str:
+    """Genera un PIN de 6 dígitos único dentro del tenant."""
+    for _ in range(20):
+        candidate = f"{secrets.randbelow(1000000):06d}"
+        exists = await db.users.find_one(tenant_query(tenant_id, {"pin": candidate}))
+        if not exists:
+            return candidate
+    raise RuntimeError("No se pudo generar un PIN único tras 20 intentos")
+
+
+def send_pin_email(to_email: str, employee_name: str, pin: str, role_label: str) -> bool:
+    """Envía el PIN por correo. Regresa True si se mandó, False si falló (nunca lanza excepción)."""
+    if not SMTP_HOST or not SMTP_USER or not SMTP_PASSWORD:
+        return False
+    try:
+        body = (
+            f"Hola {employee_name},\n\n"
+            f"Tu PIN de acceso ({role_label}) es: {pin}\n\n"
+            f"Úsalo para iniciar sesión en el punto de venta o en cocina.\n"
+            f"No compartas este PIN con nadie.\n\n"
+            f"— {SMTP_FROM_NAME}"
+        )
+        msg = MIMEText(body, "plain", "utf-8")
+        msg["Subject"] = "Tu PIN de acceso"
+        msg["From"] = f"{SMTP_FROM_NAME} <{SMTP_USER}>"
+        msg["To"] = to_email
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as server:
+            server.starttls()
+            server.login(SMTP_USER, SMTP_PASSWORD)
+            server.send_message(msg)
+        return True
+    except Exception:
+        return False

@@ -27,6 +27,12 @@ services:
       LMSTUDIO_BASE_URL: "http://host.docker.internal:1234/v1"
       # Opcional: fija un modelo; si se deja vacío usa el que esté cargado.
       LMSTUDIO_MODEL: ""
+      # --- Email (SMTP) para enviar el PIN a empleados (opcional) ---
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASSWORD: ${SMTP_PASSWORD}
+      SMTP_FROM_NAME: ${SMTP_FROM_NAME}
       # --- Terminal bancaria / alertas ---
       # Secreto que valida el webhook de la terminal (Clip/Mercado Pago/n8n).
       PAYMENTS_WEBHOOK_SECRET: "cambia-este-secreto"

@@ -112,5 +112,5 @@ def get_tenant_id(user: dict) -> str:
 
 
 def public_user(user: dict) -> dict:
-    """Return a user document without its password hash."""
-    return {k: v for k, v in user.items() if k != "password_hash"}
+    """Return a user document without its password hash or PIN."""
+    return {k: v for k, v in user.items() if k not in ("password_hash", "pin")}
