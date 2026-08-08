@@ -7,6 +7,7 @@ import Layout from "@/components/Layout";
 import { PageLoader } from "@/components/kit";
 
 import Login from "@/pages/Login";
+import PinEntry from "@/pages/PinEntry";
 import Display from "@/pages/Display";
 import Dashboard from "@/pages/Dashboard";
 import POS from "@/pages/POS";
@@ -50,6 +51,8 @@ export default function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/login" element={<LoginRoute />} />
+          {/* PIN entry for tablet shift-swap; manages its own device-activation gate */}
+          <Route path="/pin" element={<PinEntry />} />
           {/* Public customer-facing status board */}
           <Route path="/pantalla/:tenantSlug" element={<Display />} />
 
