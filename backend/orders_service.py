@@ -69,6 +69,9 @@ async def settle_order(order: dict, method: str, amount_received, actor: dict):
         "paid_at": now_iso(),
         "cashier_id": actor.get("id", "system"),
         "cashier_name": actor.get("name", ""),
+        # Sale is attributed to whoever settles it, regardless of who created it.
+        "sold_by_user_id": actor.get("id"),
+        "sold_by_name": actor.get("name", ""),
     }
     if not order.get("delivered_at"):
         updates["delivered_at"] = now_iso()

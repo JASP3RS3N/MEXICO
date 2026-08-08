@@ -148,11 +148,14 @@ class OrderCreate(BaseModel):
     table: Optional[str] = ""
     order_type: str = "comer_aqui"  # comer_aqui | para_llevar
     notes: Optional[str] = ""
-    sold_by_pin: Optional[str] = None  # employee PIN to attribute the sale
 
 
 class OrderStatusUpdate(BaseModel):
     status: str
+
+
+class PinTagRequest(BaseModel):
+    pin: Optional[str] = None  # employee PIN used to tag who accepts a kitchen order; if omitted, the session user is used
 
 
 class PaymentRequest(BaseModel):

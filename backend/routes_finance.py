@@ -36,6 +36,11 @@ async def _paid_orders(start: str, end: str, tenant_id: str):
     return await db.orders.find(query, {"_id": 0}).to_list(20000)
 
 
+async def _prepared_orders(start: str, end: str, tenant_id: str):
+    query = tenant_query(tenant_id, {"prepared_by_user_id": {"$ne": None}, "accepted_at": {"$gte": start, "$lte": end}})
+    return await db.orders.find(query, {"_id": 0}).to_list(20000)
+
+
 async def _category_map(tenant_id: str):
     cats = {c["id"]: c["name"] for c in await db.categories.find(tenant_query(tenant_id), {"_id": 0}).to_list(500)}
     prods = await db.products.find(tenant_query(tenant_id), {"_id": 0}).to_list(2000)
@@ -157,8 +162,8 @@ async def top_sellers(start: str = Query(None), end: str = Query(None), user: di
     by_seller = defaultdict(lambda: {"count": 0, "total": 0.0, "sold_by_name": ""})
     for o in orders:
         uid = o.get("sold_by_user_id")
-        if not uid:
-            continue  # unattributed sales are excluded from the ranking
+        if not uid or uid == "terminal":
+            continue  # unattributed sales, and terminal webhook charges, are excluded from the ranking
         by_seller[uid]["count"] += 1
         by_seller[uid]["total"] += float(o.get("total", 0))
         by_seller[uid]["sold_by_name"] = o.get("sold_by_name", "") or by_seller[uid]["sold_by_name"]
@@ -174,6 +179,29 @@ async def top_sellers(start: str = Query(None), end: str = Query(None), user: di
             for uid, v in by_seller.items()
         ],
         key=lambda x: -x["total"],
+    )
+    return {"period": {"start": start, "end": end}, "ranking": ranking}
+
+
+# ---------------------------------------------------------------------------
+# Top preparers (ranking de comandas aceptadas por empleado en cocina)
+# ---------------------------------------------------------------------------
+@router.get("/finance/top-preparers")
+async def top_preparers(start: str = Query(None), end: str = Query(None), user: dict = Depends(require_owner)):
+    tenant_id = get_tenant_id(user)
+    start = start or _month_start_iso()
+    end = end or now_iso()
+    orders = await _prepared_orders(start, end, tenant_id)
+    by_prep = {}
+    for o in orders:
+        uid = o["prepared_by_user_id"]
+        if uid == "terminal":
+            continue  # terminal webhook charges were not prepared by any employee
+        entry = by_prep.setdefault(uid, {"name": o.get("prepared_by_name", ""), "count": 0})
+        entry["count"] += 1
+    ranking = sorted(
+        [{"user_id": k, **v} for k, v in by_prep.items()],
+        key=lambda x: -x["count"],
     )
     return {"period": {"start": start, "end": end}, "ranking": ranking}
 

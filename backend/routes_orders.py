@@ -16,7 +16,7 @@ from config import (
     now_iso,
     tenant_query,
 )
-from models import OrderCreate, PaymentRequest
+from models import OrderCreate, PaymentRequest, PinTagRequest
 from security import get_current_user, get_tenant_id, require_roles
 from orders_service import settle_order
 
@@ -100,16 +100,6 @@ async def create_order(payload: OrderCreate, user: dict = Depends(require_roles(
             }
         )
 
-    # Optional employee attribution by quick-access PIN.
-    sold_by_user_id = None
-    sold_by_name = ""
-    if payload.sold_by_pin:
-        seller = await db.users.find_one(tenant_query(tenant_id, {"pin": payload.sold_by_pin, "active": True}))
-        if not seller:
-            raise HTTPException(status_code=400, detail="PIN de empleado no reconocido")
-        sold_by_user_id = seller["id"]
-        sold_by_name = seller.get("name", "")
-
     settings = await _get_settings(tenant_id)
     totals = _compute_totals(gross, settings)
     seq = await next_sequence("order", tenant_id)
@@ -131,8 +121,9 @@ async def create_order(payload: OrderCreate, user: dict = Depends(require_roles(
         "payment_method": None,
         "created_by": user["id"],
         "created_by_name": user.get("name", ""),
-        "sold_by_user_id": sold_by_user_id,
-        "sold_by_name": sold_by_name,
+        # Sale attribution is filled in at payment time (see settle_order).
+        "sold_by_user_id": None,
+        "sold_by_name": "",
         "created_at": now_iso(),
         "accepted_at": None,
         "ready_at": None,
@@ -232,10 +223,12 @@ async def client_display(tenant: str = Query(...)):
 # ---------------------------------------------------------------------------
 # Status transitions
 # ---------------------------------------------------------------------------
-async def _set_status(order_id: str, new_status: str, tenant_id: str, timestamp_field: str = None):
+async def _set_status(order_id: str, new_status: str, tenant_id: str, timestamp_field: str = None, extra: dict = None):
     updates = {"status": new_status}
     if timestamp_field:
         updates[timestamp_field] = now_iso()
+    if extra:
+        updates.update(extra)
     res = await db.orders.update_one(tenant_query(tenant_id, {"id": order_id}), {"$set": updates})
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail="Orden no encontrada")
@@ -243,14 +236,38 @@ async def _set_status(order_id: str, new_status: str, tenant_id: str, timestamp_
 
 
 @router.post("/orders/{order_id}/accept")
-async def accept_order(order_id: str, user: dict = Depends(require_roles("prep", "owner"))):
+async def accept_order(order_id: str, payload: PinTagRequest, user: dict = Depends(require_roles("prep", "owner"))):
     tenant_id = get_tenant_id(user)
     order = await db.orders.find_one(tenant_query(tenant_id, {"id": order_id}))
     if not order:
         raise HTTPException(status_code=404, detail="Orden no encontrada")
     if order["status"] != ORDER_PENDING:
         raise HTTPException(status_code=400, detail="La orden no está pendiente")
-    return await _set_status(order_id, ORDER_PREPARING, tenant_id, "accepted_at")
+
+    # Tag who prepares this order. If a PIN is provided, look up that employee
+    # (prep or owner) and attribute the order to them. Prep staff must supply a
+    # valid PIN; only the owner may accept without one, using their session.
+    if payload.pin:
+        preparer = await db.users.find_one(
+            tenant_query(tenant_id, {"pin": payload.pin, "active": True, "role": {"$in": ["prep", "owner"]}})
+        )
+        if not preparer:
+            raise HTTPException(status_code=400, detail="PIN no reconocido")
+        prepared_by_user_id = preparer["id"]
+        prepared_by_name = preparer.get("name", "")
+    elif user.get("role") == "owner":
+        prepared_by_user_id = user["id"]
+        prepared_by_name = user.get("name", "")
+    else:
+        raise HTTPException(status_code=400, detail="PIN requerido para aceptar la comanda")
+
+    return await _set_status(
+        order_id,
+        ORDER_PREPARING,
+        tenant_id,
+        "accepted_at",
+        extra={"prepared_by_user_id": prepared_by_user_id, "prepared_by_name": prepared_by_name},
+    )
 
 
 @router.post("/orders/{order_id}/ready")
