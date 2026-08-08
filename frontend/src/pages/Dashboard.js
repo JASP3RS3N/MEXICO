@@ -66,6 +66,7 @@ export default function Dashboard() {
   const [pnl, setPnl] = useState(null);
   const [daily, setDaily] = useState(null);
   const [topSellers, setTopSellers] = useState(null);
+  const [topPreparers, setTopPreparers] = useState(null);
   const [period, setPeriod] = useState("month");
   const [currency, setCurrency] = useState("MXN");
   const [loading, setLoading] = useState(true);
@@ -83,13 +84,15 @@ export default function Dashboard() {
       api.get("/finance/pnl", { params: range }),
       api.get("/finance/daily", { params: dayRange(new Date()) }),
       api.get("/finance/top-sellers", { params: range }),
+      api.get("/finance/top-preparers", { params: range }),
     ])
-      .then(([s, p, d, ts]) => {
+      .then(([s, p, d, ts, tp]) => {
         if (!alive) return;
         setSummary(s.data);
         setPnl(p.data);
         setDaily(d.data);
         setTopSellers(ts.data);
+        setTopPreparers(tp.data);
       })
       .finally(() => alive && setLoading(false));
     return () => {
@@ -333,6 +336,39 @@ export default function Dashboard() {
             </div>
           ) : (
             <EmptyChart text="Aún no hay ventas atribuidas a un empleado este mes" />
+          )}
+        </div>
+      </Card>
+
+      {/* Top preparers */}
+      <Card className="mt-6">
+        <CardHead title="Mejor preparador del mes" subtitle="Comandas aceptadas por PIN de empleado" />
+        <div className="p-5">
+          {topPreparers?.ranking?.length ? (
+            <div className="space-y-2">
+              {topPreparers.ranking.map((s, i) => (
+                <div
+                  key={s.user_id}
+                  className={`flex items-center gap-3 rounded-xl px-3 py-2 ${
+                    i === 0 ? "bg-amber-500/10 border border-amber-500/30" : ""
+                  }`}
+                >
+                  <span className="w-6 flex justify-center">
+                    {i === 0 ? (
+                      <Trophy className="h-4 w-4 text-amber-400" />
+                    ) : (
+                      <span className="text-textDim font-mono text-sm">{i + 1}</span>
+                    )}
+                  </span>
+                  <span className={`flex-1 text-sm truncate ${i === 0 ? "text-amber-200 font-semibold" : "text-textBright"}`}>
+                    {s.name || "—"}
+                  </span>
+                  <Badge color="gray">{num(s.count)} comandas</Badge>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <EmptyChart text="Aún no hay comandas atribuidas a un preparador este mes" />
           )}
         </div>
       </Card>

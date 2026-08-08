@@ -3,7 +3,7 @@ import { ChefHat, Clock, ArrowRight, Check, Package, UtensilsCrossed } from "luc
 import { toast } from "sonner";
 import api from "@/lib/api";
 import { PageHeader } from "@/components/Layout";
-import { Btn, Badge, EmptyState } from "@/components/kit";
+import { Btn, Badge, EmptyState, Modal, Input } from "@/components/kit";
 import { minsSince } from "@/lib/format";
 
 const TYPE_LABEL = { comer_aqui: "Comer aquí", para_llevar: "Para llevar" };
@@ -78,6 +78,11 @@ export default function Kitchen() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(null);
 
+  // Accepting a kitchen order tags who prepares it via their PIN.
+  const [pinModalOpen, setPinModalOpen] = useState(false);
+  const [pinInput, setPinInput] = useState("");
+  const [pendingAcceptId, setPendingAcceptId] = useState(null);
+
   const load = useCallback(async () => {
     try {
       const { data } = await api.get("/kitchen");
@@ -96,6 +101,13 @@ export default function Kitchen() {
   }, [load]);
 
   const doAction = async (id, action) => {
+    // Accepting opens the PIN modal to tag the preparer; ready/deliver go direct.
+    if (action === "accept") {
+      setPendingAcceptId(id);
+      setPinInput("");
+      setPinModalOpen(true);
+      return;
+    }
     setBusy(id);
     try {
       await api.post(`/orders/${id}/${action}`);
@@ -105,6 +117,46 @@ export default function Kitchen() {
     } finally {
       setBusy(null);
     }
+  };
+
+  // Accept with the entered PIN. On failure keep the modal open (and the pending
+  // id) so a wrong PIN can be retried; only the input is cleared.
+  const confirmAccept = async () => {
+    setBusy(pendingAcceptId);
+    try {
+      await api.post(`/orders/${pendingAcceptId}/accept`, { pin: pinInput });
+      setPinModalOpen(false);
+      setPinInput("");
+      setPendingAcceptId(null);
+      await load();
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || "No se pudo aceptar");
+      setPinInput("");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  // Accept without a PIN — the backend attributes it to the active session user.
+  const acceptWithoutPin = async () => {
+    setBusy(pendingAcceptId);
+    try {
+      await api.post(`/orders/${pendingAcceptId}/accept`, {});
+      setPinModalOpen(false);
+      setPinInput("");
+      setPendingAcceptId(null);
+      await load();
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || "No se pudo aceptar");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const cancelAccept = () => {
+    setPinModalOpen(false);
+    setPinInput("");
+    setPendingAcceptId(null);
   };
 
   const cols = [
@@ -146,6 +198,45 @@ export default function Kitchen() {
           ))}
         </div>
       )}
+
+      {/* PIN tag modal — labels who prepares the order; never logs out or redirects. */}
+      <Modal
+        open={pinModalOpen}
+        onClose={cancelAccept}
+        title="¿Quién prepara esta comanda?"
+        footer={
+          <>
+            <Btn variant="ghost" onClick={cancelAccept}>
+              Cancelar
+            </Btn>
+            <Btn variant="success" loading={busy === pendingAcceptId} onClick={confirmAccept}>
+              Confirmar
+            </Btn>
+          </>
+        }
+      >
+        <div className="space-y-3">
+          <p className="text-sm text-textDim">Ingresa tu PIN para etiquetar quién prepara esta comanda.</p>
+          <Input
+            type="number"
+            inputMode="numeric"
+            maxLength={6}
+            autoFocus
+            value={pinInput}
+            onChange={(e) => setPinInput(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && confirmAccept()}
+            placeholder="••••"
+            className="text-center text-3xl font-mono tracking-[0.4em]"
+          />
+          <button
+            onClick={acceptWithoutPin}
+            disabled={busy === pendingAcceptId}
+            className="w-full text-xs text-textDim hover:text-textMain py-1 disabled:opacity-50"
+          >
+            Aceptar sin PIN
+          </button>
+        </div>
+      </Modal>
     </div>
   );
 }
