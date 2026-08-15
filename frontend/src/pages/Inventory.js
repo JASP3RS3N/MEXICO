@@ -11,6 +11,7 @@ const emptyMat = { sku: "", name: "", unit: "kg", category: "General", cost_per_
 
 export default function Inventory() {
   const [materials, setMaterials] = useState([]);
+  const [suppliers, setSuppliers] = useState([]);
   const [currency, setCurrency] = useState("MXN");
   const [loading, setLoading] = useState(true);
   const [onlyLow, setOnlyLow] = useState(false);
@@ -20,8 +21,9 @@ export default function Inventory() {
 
   const load = async () => {
     try {
-      const [m, s] = await Promise.all([api.get("/materials"), api.get("/settings")]);
+      const [m, s, sup] = await Promise.all([api.get("/materials"), api.get("/settings"), api.get("/suppliers")]);
       setMaterials(m.data);
+      setSuppliers((sup.data || []).filter((x) => x.active !== false));
       if (s.data?.currency) setCurrency(s.data.currency);
     } catch {
       toast.error("No se pudo cargar el inventario");
@@ -182,7 +184,14 @@ export default function Inventory() {
             <Field label="Stock mínimo (alerta)"><Input type="number" step="0.001" value={modal.min_stock} onChange={(e) => setModal({ ...modal, min_stock: e.target.value })} /></Field>
             <Field label="Stock par (objetivo)"><Input type="number" step="0.001" value={modal.par_stock} onChange={(e) => setModal({ ...modal, par_stock: e.target.value })} /></Field>
             <Field label="Mínimo de compra (MOQ)" hint="Cantidad mínima al generar una orden de compra"><Input type="number" step="0.001" value={modal.min_order} onChange={(e) => setModal({ ...modal, min_order: e.target.value })} /></Field>
-            <Field label="Proveedor"><Input value={modal.supplier} onChange={(e) => setModal({ ...modal, supplier: e.target.value })} /></Field>
+            <Field label="Proveedor">
+              <Select value={modal.supplier} onChange={(e) => setModal({ ...modal, supplier: e.target.value })}>
+                <option value="">Sin proveedor / sin asignar</option>
+                {suppliers.map((s) => (
+                  <option key={s.id} value={s.name}>{s.name}</option>
+                ))}
+              </Select>
+            </Field>
             <div className="sm:col-span-2"><Toggle checked={modal.active} onChange={(v) => setModal({ ...modal, active: v })} label="Activo" /></div>
           </div>
         )}
