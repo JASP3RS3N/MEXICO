@@ -24,12 +24,16 @@ async def _fire_webhook(alert: dict):
         logger.warning("No se pudo enviar el webhook de alerta: %s", exc)
 
 
-async def maybe_low_stock_alert(material_id: str):
-    """Create an alert when a material is at/below its minimum (deduped per material)."""
+async def maybe_low_stock_alert(material_id: str) -> bool:
+    """Create an alert when a material is at/below its minimum (deduped per material).
+
+    Returns True if a new alert was created, False otherwise (material not
+    found, stock is fine, or an unresolved alert already exists for it).
+    """
     # Looked up by its unique id; tenant scope is derived from the material itself.
     mat = await db.materials.find_one({"id": material_id}, {"_id": 0})
     if not mat:
-        return
+        return False
     tenant_id = mat.get("tenant_id")
     current = float(mat.get("current_stock", 0))
     minimum = float(mat.get("min_stock", 0))
@@ -39,9 +43,9 @@ async def maybe_low_stock_alert(material_id: str):
             tenant_query(tenant_id, {"material_id": material_id, "type": "low_stock", "resolved": False}),
             {"$set": {"resolved": True, "resolved_at": now_iso()}},
         )
-        return
+        return False
     if await db.alerts.find_one(tenant_query(tenant_id, {"material_id": material_id, "type": "low_stock", "resolved": False})):
-        return  # already alerted, don't spam
+        return False  # already alerted, don't spam
 
     level = "critical" if current <= 0 else "warning"
     alert = {
@@ -63,6 +67,21 @@ async def maybe_low_stock_alert(material_id: str):
     await db.alerts.insert_one(alert)
     await _fire_webhook(alert)
     logger.info("Alerta de bajo stock: %s", mat["name"])
+    return True
+
+
+async def scan_all_low_stock(tenant_id: str) -> int:
+    """Bulk scan of every active material for the tenant, reusing
+    maybe_low_stock_alert per material — same alert shape, same dedup — just
+    triggered on demand instead of reactively after a single stock change.
+    Returns how many NEW alerts were created.
+    """
+    materials = await db.materials.find(tenant_query(tenant_id, {"active": True}), {"_id": 0}).to_list(2000)
+    new_alerts = 0
+    for m in materials:
+        if await maybe_low_stock_alert(m["id"]):
+            new_alerts += 1
+    return new_alerts
 
 
 async def maybe_low_stock_alert_product(product_id: str):

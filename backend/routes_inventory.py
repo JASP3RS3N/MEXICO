@@ -25,7 +25,7 @@ from models import (
     StockAdjust,
 )
 from security import get_current_user, get_tenant_id, require_owner, require_roles
-from alerts import check_stale_supplier_prices
+from alerts import check_stale_supplier_prices, maybe_low_stock_alert, scan_all_low_stock
 
 router = APIRouter()
 
@@ -123,6 +123,9 @@ async def adjust_stock(material_id: str, payload: StockAdjust, user: dict = Depe
         tenant_query(tenant_id, {"id": material_id}), {"$set": {"current_stock": new_stock, "updated_at": now_iso()}}
     )
     await _record_movement(material_id, "adjustment", float(payload.qty), payload.reason or "Ajuste", user["id"], tenant_id)
+    # A manual adjustment (merma, corrección, recepción) can push stock at/below
+    # minimum just like a sale — same reactive alert check either way.
+    await maybe_low_stock_alert(material_id)
     return await db.materials.find_one(tenant_query(tenant_id, {"id": material_id}), {"_id": 0})
 
 
@@ -138,6 +141,15 @@ async def low_stock(user: dict = Depends(require_owner)):
     tenant_id = get_tenant_id(user)
     materials = await db.materials.find(tenant_query(tenant_id, {"active": True}), {"_id": 0}).to_list(2000)
     return [m for m in materials if float(m.get("current_stock", 0)) <= float(m.get("min_stock", 0))]
+
+
+@router.post("/inventory/scan-low-stock")
+async def scan_low_stock(user: dict = Depends(require_owner)):
+    """On-demand bulk low-stock scan across every active material (same alert
+    the reactive per-sale/per-adjustment check would create)."""
+    tenant_id = get_tenant_id(user)
+    new_alerts = await scan_all_low_stock(tenant_id)
+    return {"new_alerts": new_alerts}
 
 
 @router.get("/inventory/movements")
