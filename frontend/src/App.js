@@ -30,9 +30,9 @@ function RoleHome() {
 }
 
 function Protected({ roles, children }) {
-  const { user, loading } = useAuth();
+  const { user, loading, deviceActivated } = useAuth();
   if (loading) return <div className="min-h-screen bg-background"><PageLoader /></div>;
-  if (!user) return <Navigate to="/login" replace />;
+  if (!user) return <Navigate to={deviceActivated ? "/pin" : "/login"} replace />;
   if (roles && !roles.includes(user.role)) return <RoleHome />;
   return <Layout>{children}</Layout>;
 }
