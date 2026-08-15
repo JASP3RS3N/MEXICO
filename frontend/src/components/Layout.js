@@ -43,7 +43,7 @@ const NAV = [
 ];
 
 export default function Layout({ children }) {
-  const { user, logout } = useAuth();
+  const { user, logout, endShift } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const [open, setOpen] = useState(false);
@@ -70,8 +70,15 @@ export default function Layout({ children }) {
   const items = NAV.filter((n) => n.roles.includes(user?.role));
 
   const handleLogout = () => {
-    logout();
-    navigate("/login");
+    // Cashier/prep only end their shift (device stays activated for the next
+    // PIN login); the owner's logout deactivates the device entirely.
+    if (user?.role === "cashier" || user?.role === "prep") {
+      endShift();
+      navigate("/pin");
+    } else {
+      logout();
+      navigate("/login");
+    }
   };
 
   const SidebarContent = (
@@ -134,7 +141,7 @@ export default function Layout({ children }) {
           </div>
           <button
             onClick={handleLogout}
-            title="Cerrar sesión"
+            title={user?.role === "cashier" || user?.role === "prep" ? "Terminar turno" : "Cerrar sesión"}
             className="text-textDim hover:text-red-400 transition p-1.5"
           >
             <LogOut className="h-[18px] w-[18px]" />
