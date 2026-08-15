@@ -17,7 +17,7 @@ from config import (
     tenant_query,
 )
 from models import OrderCreate, PaymentRequest, PinTagRequest
-from security import get_current_user, get_tenant_id, require_roles
+from security import get_current_user, get_tenant_id, require_pin_session, require_roles
 from orders_service import settle_order
 
 router = APIRouter()
@@ -68,7 +68,7 @@ async def _resolve_tenant_by_slug(slug: str) -> str:
 # Creation (cashier / owner)
 # ---------------------------------------------------------------------------
 @router.post("/orders")
-async def create_order(payload: OrderCreate, user: dict = Depends(require_roles("cashier", "owner"))):
+async def create_order(payload: OrderCreate, user: dict = Depends(require_roles("cashier", "owner")), _pin_check: dict = Depends(require_pin_session)):
     tenant_id = get_tenant_id(user)
     if not payload.items:
         raise HTTPException(status_code=400, detail="La orden necesita al menos un producto")
@@ -302,7 +302,7 @@ async def cancel_order(order_id: str, user: dict = Depends(require_roles("cashie
 # Payment (cobro) — deducts inventory per recipe once paid
 # ---------------------------------------------------------------------------
 @router.post("/orders/{order_id}/pay")
-async def pay_order(order_id: str, payload: PaymentRequest, user: dict = Depends(require_roles("cashier", "owner"))):
+async def pay_order(order_id: str, payload: PaymentRequest, user: dict = Depends(require_roles("cashier", "owner")), _pin_check: dict = Depends(require_pin_session)):
     tenant_id = get_tenant_id(user)
     order = await db.orders.find_one(tenant_query(tenant_id, {"id": order_id}))
     if not order:

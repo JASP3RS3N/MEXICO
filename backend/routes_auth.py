@@ -58,6 +58,12 @@ async def login(payload: LoginRequest):
         raise HTTPException(status_code=401, detail="Usuario o contraseña incorrectos")
     if not user.get("active", True):
         raise HTTPException(status_code=403, detail="Usuario desactivado")
+    # Cashier/prep must authenticate by PIN on an activated device, not here.
+    if user["role"] in (ROLE_CASHIER, ROLE_PREP):
+        raise HTTPException(
+            status_code=403,
+            detail="Los cajeros y preparadores deben iniciar sesión con su PIN, no con usuario y contraseña.",
+        )
     token = create_token(user)
     return {
         "token": token,

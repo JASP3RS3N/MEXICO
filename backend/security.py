@@ -109,12 +109,26 @@ def require_roles(*roles: str):
     return guard
 
 
-async def require_pin_session(user: dict = Depends(get_current_user)) -> dict:
-    """Semantic alias for routes that expect a PIN-initiated session.
+async def require_pin_session(
+    user: dict = Depends(get_current_user),
+    creds: HTTPAuthorizationCredentials = Depends(bearer),
+) -> dict:
+    """Ensure cashier/prep act through a PIN-initiated session, not user+password.
 
-    PIN and normal tokens are both valid JWTs resolved by get_current_user, so
-    this adds no extra check today — it just documents intent for future routes.
+    The owner may always operate with their normal session; everyone else must
+    present a token carrying the ``pin_session`` claim (issued by /auth/login-pin).
     """
+    if user["role"] == ROLE_OWNER:
+        return user  # el dueño siempre puede operar con su sesión normal
+    try:
+        payload = decode_token(creds.credentials)
+    except Exception:
+        raise HTTPException(status_code=401, detail="Token inválido")
+    if not payload.get("pin_session"):
+        raise HTTPException(
+            status_code=403,
+            detail="Los cajeros y preparadores deben iniciar sesión con su PIN, no con usuario y contraseña.",
+        )
     return user
 
 
