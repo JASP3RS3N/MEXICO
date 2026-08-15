@@ -1,5 +1,6 @@
 """Raw materials (materia prima) master data + purchase orders."""
 import math
+from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -12,6 +13,7 @@ from config import (
     db,
     gen_id,
     next_sequence,
+    now,
     now_iso,
     tenant_query,
 )
@@ -23,6 +25,7 @@ from models import (
     StockAdjust,
 )
 from security import get_current_user, get_tenant_id, require_owner, require_roles
+from alerts import check_stale_supplier_prices
 
 router = APIRouter()
 
@@ -67,6 +70,10 @@ async def create_material(payload: MaterialCreate, user: dict = Depends(require_
         "min_stock": float(payload.min_stock),
         "par_stock": float(payload.par_stock),
         "min_order": float(payload.min_order),
+        "lead_time_days": int(payload.lead_time_days),
+        # A material's cost is set for the first time at creation, so it's
+        # not "stale" yet — stamp today rather than leaving it null.
+        "last_price_update": now_iso()[:10],
         "supplier": payload.supplier or "",
         "active": payload.active,
         "created_at": now_iso(),
@@ -85,9 +92,23 @@ async def update_material(material_id: str, payload: MaterialUpdate, user: dict 
     if not material:
         raise HTTPException(status_code=404, detail="Materia prima no encontrada")
     updates = {k: v for k, v in payload.model_dump(exclude_unset=True).items() if v is not None}
+
+    # Track when the price actually changes so stale-price alerts can trust it.
+    price_changed = "cost_per_unit" in updates and round(float(updates["cost_per_unit"]), 4) != round(
+        float(material.get("cost_per_unit", 0)), 4
+    )
+    if price_changed:
+        updates["last_price_update"] = now_iso()[:10]
+
     if updates:
         updates["updated_at"] = now_iso()
         await db.materials.update_one(tenant_query(tenant_id, {"id": material_id}), {"$set": updates})
+
+    if price_changed:
+        # A price change is the natural moment to re-scan for stale supplier
+        # prices tenant-wide — same reactive pattern as the low-stock alerts.
+        await check_stale_supplier_prices(tenant_id)
+
     return await db.materials.find_one(tenant_query(tenant_id, {"id": material_id}), {"_id": 0})
 
 
@@ -169,6 +190,98 @@ async def po_suggestions(user: dict = Depends(require_owner)):
     return suggestions
 
 
+# ---------------------------------------------------------------------------
+# Reorder forecast (consumption-based, complements the min/par suggestions above)
+# ---------------------------------------------------------------------------
+async def _avg_daily_consumption(material_id: str, tenant_id: str, paid_orders: list = None):
+    """Average daily consumption of a material over the last 30 days of paid
+    sales (or the real span of history available, if shorter), derived from
+    each sold item's recipe/BOM. Returns None when the tenant has less than
+    7 days of paid-order history — not enough data to trust an average.
+
+    ``paid_orders`` lets a caller pre-fetch the 30-day window once and share
+    it across materials instead of re-querying per material.
+    """
+    if paid_orders is None:
+        window_start = (now() - timedelta(days=30)).isoformat()
+        paid_orders = await db.orders.find(
+            tenant_query(tenant_id, {"paid": True, "paid_at": {"$gte": window_start}}),
+            {"_id": 0, "items": 1, "paid_at": 1},
+        ).to_list(5000)
+
+    if not paid_orders:
+        return None
+
+    # Tenant-wide sales history: distinct calendar days with at least one paid order.
+    days_with_sales = {o["paid_at"][:10] for o in paid_orders if o.get("paid_at")}
+    if len(days_with_sales) < 7:
+        return None
+
+    total_consumed = 0.0
+    for o in paid_orders:
+        for item in o.get("items", []):
+            qty = int(item.get("qty", 0))
+            for r in item.get("recipe", []):
+                if r.get("material_id") == material_id:
+                    total_consumed += float(r.get("qty", 0)) * qty
+
+    span_days = min(len(days_with_sales), 30)
+    return round(total_consumed / span_days, 4)
+
+
+@router.get("/inventory/reorder-forecast")
+async def reorder_forecast(user: dict = Depends(require_owner)):
+    """Per-material reorder forecast: current stock, average daily consumption
+    (last 30 days of paid sales), estimated days of coverage and stockout
+    date, and whether a reorder is urgent given the supplier's lead time.
+    Complements — does not replace — /purchase-orders/suggestions.
+    """
+    tenant_id = get_tenant_id(user)
+    materials = await db.materials.find(tenant_query(tenant_id, {"active": True}), {"_id": 0}).to_list(2000)
+
+    # Fetch the 30-day paid-orders window once and share it across materials.
+    window_start = (now() - timedelta(days=30)).isoformat()
+    paid_orders = await db.orders.find(
+        tenant_query(tenant_id, {"paid": True, "paid_at": {"$gte": window_start}}),
+        {"_id": 0, "items": 1, "paid_at": 1},
+    ).to_list(5000)
+
+    today = now().date()
+    forecast = []
+    for m in materials:
+        avg_daily = await _avg_daily_consumption(m["id"], tenant_id, paid_orders=paid_orders)
+        current = float(m.get("current_stock", 0))
+        lead_time = int(m.get("lead_time_days", 3))
+
+        # Null/zero average consumption means there's nothing solid to project
+        # from — report no coverage estimate rather than inventing one (and
+        # avoid a divide-by-zero on a genuinely unconsumed material).
+        if avg_daily:
+            days_of_coverage = round(current / avg_daily, 1)
+            estimated_stockout_date = (today + timedelta(days=days_of_coverage)).isoformat()
+            needs_reorder_soon = days_of_coverage <= lead_time
+        else:
+            days_of_coverage = None
+            estimated_stockout_date = None
+            needs_reorder_soon = False
+
+        forecast.append(
+            {
+                "material_id": m["id"],
+                "name": m["name"],
+                "current_stock": current,
+                "min_stock": float(m.get("min_stock", 0)),
+                "par_stock": float(m.get("par_stock", 0)),
+                "lead_time_days": lead_time,
+                "consumo_diario_promedio": avg_daily,
+                "days_of_coverage": days_of_coverage,
+                "estimated_stockout_date": estimated_stockout_date,
+                "needs_reorder_soon": needs_reorder_soon,
+            }
+        )
+    return forecast
+
+
 @router.post("/purchase-orders")
 async def create_po(payload: PurchaseOrderCreate, user: dict = Depends(require_owner)):
     tenant_id = get_tenant_id(user)
@@ -236,13 +349,31 @@ async def update_po_status(po_id: str, payload: POStatusUpdate, user: dict = Dep
         raise HTTPException(status_code=404, detail="Orden de compra no encontrada")
     if payload.status not in (PO_ORDERED, PO_RECEIVED, PO_CANCELLED):
         raise HTTPException(status_code=400, detail="Estatus inválido")
+    # Once received, a PO is a locked historical record: no further status
+    # change (including a second "receive") nor item edits are allowed.
     if po["status"] == PO_RECEIVED:
-        raise HTTPException(status_code=400, detail="La orden ya fue recibida")
+        raise HTTPException(status_code=400, detail="Esta orden de compra ya fue recibida")
 
     updates = {"status": payload.status}
 
     # Receiving a PO increases stock and updates the material's last cost.
     if payload.status == PO_RECEIVED:
+        # Can only receive an order that was actually placed with the
+        # supplier — not a draft, and not a cancelled order.
+        if po["status"] == PO_CANCELLED:
+            raise HTTPException(status_code=400, detail="Esta orden de compra fue cancelada, no se puede recibir")
+        if po["status"] != PO_ORDERED:
+            raise HTTPException(status_code=400, detail="La orden de compra debe estar ordenada antes de poder recibirse")
+
+        # Reject the whole receipt if any received item doesn't belong to this
+        # PO's original item list — no partial/foreign receiving.
+        valid_material_ids = {item["material_id"] for item in po["items"]}
+        for ri in payload.received_items or []:
+            if ri.material_id not in valid_material_ids:
+                mat = await db.materials.find_one(tenant_query(tenant_id, {"id": ri.material_id}), {"_id": 0, "name": 1})
+                label = mat["name"] if mat else ri.material_id
+                raise HTTPException(status_code=400, detail=f"El insumo {label} no pertenece a esta orden de compra")
+
         # The actual quantity received per material may differ from what was
         # ordered; fall back to the ordered qty when not provided (back-compat).
         # No MOQ validation on receiving — the supplier may send any amount.
@@ -264,10 +395,21 @@ async def update_po_status(po_id: str, payload: POStatusUpdate, user: dict = Dep
                 await _record_movement(
                     item["material_id"], "purchase", actual_qty, po["po_number"], user["id"], tenant_id
                 )
+            # Flag large over-deliveries (>120% of what was ordered) so the
+            # owner can double-check them; doesn't block the receipt.
+            ordered_qty = float(item["qty"])
+            variance_pct = round((actual_qty - ordered_qty) / ordered_qty * 100, 2) if ordered_qty else 0.0
+            requires_review = ordered_qty > 0 and actual_qty > ordered_qty * 1.2
             # Keep ordered vs received traceability on the PO item itself.
-            received_items.append({**item, "received_qty": actual_qty})
+            received_items.append({
+                **item,
+                "received_qty": actual_qty,
+                "variance_pct": variance_pct,
+                "requires_review": requires_review,
+            })
         updates["items"] = received_items
         updates["received_at"] = now_iso()
+        updates["received_by"] = user["id"]
 
     await db.purchase_orders.update_one(tenant_query(tenant_id, {"id": po_id}), {"$set": updates})
     return await db.purchase_orders.find_one(tenant_query(tenant_id, {"id": po_id}), {"_id": 0})
