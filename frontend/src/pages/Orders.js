@@ -36,6 +36,27 @@ const METHODS = [
   { key: "transferencia", label: "Transferencia", icon: ArrowRightLeft },
 ];
 
+// Informational-only grouping: when several items carry a diner_name, cluster
+// them by person with a per-person subtotal. Doesn't touch totals or payment.
+function groupItemsByDiner(items) {
+  const withDiner = items.filter((it) => it.diner_name);
+  if (withDiner.length < 2) return null;
+  const groups = {};
+  const order = [];
+  items.forEach((it) => {
+    const label = it.diner_name || "Sin asignar";
+    if (!groups[label]) {
+      groups[label] = { diner: label, items: [], subtotal: 0 };
+      order.push(label);
+    }
+    groups[label].items.push(it);
+    groups[label].subtotal += it.line_total || 0;
+  });
+  // Keep assignment order, but push the "unassigned" bucket to the end.
+  order.sort((a, b) => (a === "Sin asignar" ? 1 : b === "Sin asignar" ? -1 : 0));
+  return order.map((k) => groups[k]);
+}
+
 export default function Orders() {
   const { user } = useAuth();
   const isCashier = user?.role === "cashier";
@@ -141,6 +162,7 @@ export default function Orders() {
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {orders.map((o) => {
             const meta = STATUS_META[o.status] || { label: o.status, color: "gray" };
+            const dinerGroups = groupItemsByDiner(o.items);
             return (
               <div key={o.id} className="bg-surface border border-border rounded-2xl p-4">
                 <div className="flex items-center justify-between mb-2 gap-2">
@@ -157,18 +179,43 @@ export default function Orders() {
                     {o.paid && o.payment_method ? ` · ${o.payment_method}` : ""}
                   </p>
                 </div>
-                <ul className="text-sm text-textMain space-y-0.5 mb-3 max-h-24 overflow-y-auto">
-                  {o.items.map((it, i) => (
-                    <li key={i} className="flex justify-between gap-2">
-                      <span className="truncate">
-                        {it.qty}× {it.name}
-                      </span>
-                      {it.line_total != null && (
-                        <span className="font-mono text-textDim shrink-0">{money(it.line_total, currency)}</span>
-                      )}
-                    </li>
-                  ))}
-                </ul>
+                {dinerGroups ? (
+                  <div className="text-sm mb-3 max-h-32 overflow-y-auto space-y-2">
+                    {dinerGroups.map((g) => (
+                      <div key={g.diner}>
+                        <p className="flex items-center justify-between gap-2 text-xs font-semibold text-amber-300">
+                          <span className="truncate">{g.diner}</span>
+                          <span className="font-mono text-textDim shrink-0">{money(g.subtotal, currency)}</span>
+                        </p>
+                        <ul className="text-textMain space-y-0.5 mt-0.5">
+                          {g.items.map((it, i) => (
+                            <li key={i} className="flex justify-between gap-2 pl-2">
+                              <span className="truncate">
+                                {it.qty}× {it.name}
+                              </span>
+                              {it.line_total != null && (
+                                <span className="font-mono text-textDim shrink-0">{money(it.line_total, currency)}</span>
+                              )}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <ul className="text-sm text-textMain space-y-0.5 mb-3 max-h-24 overflow-y-auto">
+                    {o.items.map((it, i) => (
+                      <li key={i} className="flex justify-between gap-2">
+                        <span className="truncate">
+                          {it.qty}× {it.name}
+                        </span>
+                        {it.line_total != null && (
+                          <span className="font-mono text-textDim shrink-0">{money(it.line_total, currency)}</span>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                )}
                 <div className="flex items-center justify-between border-t border-border pt-3">
                   <span className="font-bold font-mono text-money">{money(o.total, currency)}</span>
                   <div className="flex gap-2">

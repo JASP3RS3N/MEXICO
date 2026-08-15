@@ -140,6 +140,7 @@ class OrderItemInput(BaseModel):
     product_id: str
     qty: int = 1
     notes: Optional[str] = ""
+    diner_name: Optional[str] = ""  # nombre/número de la persona que pidió este platillo, opcional
 
 
 class OrderCreate(BaseModel):

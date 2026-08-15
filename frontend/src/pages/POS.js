@@ -81,7 +81,7 @@ export default function POS() {
     setCart((prev) => {
       const found = prev.find((i) => i.product.id === p.id);
       if (found) return prev.map((i) => (i.product.id === p.id ? { ...i, qty: i.qty + 1 } : i));
-      return [...prev, { product: p, qty: 1, notes: "" }];
+      return [...prev, { product: p, qty: 1, notes: "", diner: "" }];
     });
   };
   const changeQty = (id, delta) =>
@@ -92,6 +92,8 @@ export default function POS() {
     );
   const setNote = (id, notes) =>
     setCart((prev) => prev.map((i) => (i.product.id === id ? { ...i, notes } : i)));
+  const setDiner = (id, diner) =>
+    setCart((prev) => prev.map((i) => (i.product.id === id ? { ...i, diner } : i)));
   const removeItem = (id) => setCart((prev) => prev.filter((i) => i.product.id !== id));
   const clearCart = () => {
     setCart([]);
@@ -110,7 +112,7 @@ export default function POS() {
       : { subtotal: gross, tax: gross * rate, total: gross + gross * rate };
 
   const buildPayload = () => ({
-    items: cart.map((i) => ({ product_id: i.product.id, qty: i.qty, notes: i.notes })),
+    items: cart.map((i) => ({ product_id: i.product.id, qty: i.qty, notes: i.notes, diner_name: i.diner || "" })),
     customer_name: customer,
     table,
     order_type: orderType,
@@ -276,12 +278,20 @@ export default function POS() {
                       {money(i.product.price * i.qty, settings.currency)}
                     </span>
                   </div>
-                  <input
-                    value={i.notes}
-                    onChange={(e) => setNote(i.product.id, e.target.value)}
-                    placeholder="Nota (sin cebolla, término…)"
-                    className="mt-2 w-full bg-surface border border-border rounded-lg px-2 py-1 text-xs text-textBright placeholder:text-textDim focus:outline-none focus:border-amber-500/50"
-                  />
+                  <div className="mt-2 grid grid-cols-2 gap-2">
+                    <input
+                      value={i.notes}
+                      onChange={(e) => setNote(i.product.id, e.target.value)}
+                      placeholder="Nota (sin cebolla, término…)"
+                      className="w-full bg-surface border border-border rounded-lg px-2 py-1 text-xs text-textBright placeholder:text-textDim focus:outline-none focus:border-amber-500/50"
+                    />
+                    <input
+                      value={i.diner || ""}
+                      onChange={(e) => setDiner(i.product.id, e.target.value)}
+                      placeholder="Persona (opcional)"
+                      className="w-full bg-surface border border-border rounded-lg px-2 py-1 text-xs text-textBright placeholder:text-textDim focus:outline-none focus:border-amber-500/50"
+                    />
+                  </div>
                 </div>
               ))
             )}

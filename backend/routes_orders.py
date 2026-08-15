@@ -92,6 +92,7 @@ async def create_order(payload: OrderCreate, user: dict = Depends(require_roles(
                 "price": float(product["price"]),
                 "line_total": line_total,
                 "notes": it.notes or "",
+                "diner_name": (it.diner_name or "").strip(),
                 "station": product.get("station", "cocina"),
                 # snapshot of unit ingredient cost for accurate COGS later
                 "unit_cost": float(product.get("cost", 0) or 0),
