@@ -18,17 +18,25 @@ const emptyPO = { supplier: "", notes: "", items: [] };
 export default function PurchaseOrders() {
   const [pos, setPos] = useState([]);
   const [materials, setMaterials] = useState([]);
+  const [suppliers, setSuppliers] = useState([]);
   const [currency, setCurrency] = useState("MXN");
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState(null);
+  const [receiveModal, setReceiveModal] = useState(null);
   const [saving, setSaving] = useState(false);
   const [expanded, setExpanded] = useState(null);
 
   const load = async () => {
     try {
-      const [p, m, s] = await Promise.all([api.get("/purchase-orders"), api.get("/materials"), api.get("/settings")]);
+      const [p, m, s, sup] = await Promise.all([
+        api.get("/purchase-orders"),
+        api.get("/materials"),
+        api.get("/settings"),
+        api.get("/suppliers"),
+      ]);
       setPos(p.data);
       setMaterials(m.data);
+      setSuppliers((sup.data || []).filter((x) => x.active !== false));
       if (s.data?.currency) setCurrency(s.data.currency);
     } catch {
       toast.error("No se pudo cargar");
@@ -81,12 +89,22 @@ export default function PurchaseOrders() {
     if (!items.length) return toast.error("Agrega al menos un insumo con cantidad");
     setSaving(true);
     try {
-      await api.post("/purchase-orders", {
+      const { data } = await api.post("/purchase-orders", {
         supplier: modal.supplier,
         notes: modal.notes,
         items: items.map((r) => ({ material_id: r.material_id, qty: Number(r.qty), unit_cost: Number(r.unit_cost || 0) })),
       });
       toast.success("Orden de compra creada");
+      // The backend may round quantities up to each supplier's MOQ; warn about it.
+      const adjustments = data?.adjustments || [];
+      if (adjustments.length > 0) {
+        toast.info(`Se ajustaron ${adjustments.length} insumo(s) al MOQ del proveedor`, {
+          description: adjustments
+            .map((a) => `${a.name}: ${num(a.original_qty, 2)} → ${num(a.adjusted_qty, 2)}`)
+            .join("\n"),
+          duration: 6000,
+        });
+      }
       setModal(null);
       load();
     } catch (err) {
@@ -103,6 +121,46 @@ export default function PurchaseOrders() {
       load();
     } catch (err) {
       toast.error(err?.response?.data?.detail || "No se pudo actualizar");
+    }
+  };
+
+  // Receiving captures the actual quantity per item (may differ from ordered).
+  const openReceive = (po) =>
+    setReceiveModal({
+      po_id: po.id,
+      po_number: po.po_number,
+      items: po.items.map((it) => ({
+        material_id: it.material_id,
+        name: it.name,
+        unit: it.unit,
+        ordered_qty: it.qty,
+        received_qty: String(it.qty),
+      })),
+    });
+
+  const setReceivedQty = (i, val) =>
+    setReceiveModal((rm) => ({
+      ...rm,
+      items: rm.items.map((it, idx) => (idx === i ? { ...it, received_qty: val } : it)),
+    }));
+
+  const confirmReceive = async () => {
+    setSaving(true);
+    try {
+      await api.put(`/purchase-orders/${receiveModal.po_id}/status`, {
+        status: "received",
+        received_items: receiveModal.items.map((it) => ({
+          material_id: it.material_id,
+          received_qty: Number(it.received_qty || 0),
+        })),
+      });
+      toast.success("Recibida · inventario actualizado");
+      setReceiveModal(null);
+      load();
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || "No se pudo recibir");
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -182,7 +240,7 @@ export default function PurchaseOrders() {
                       {(po.status === "draft" || po.status === "ordered") && (
                         <>
                           <Btn size="sm" variant="ghost" onClick={() => setStatus(po.id, "cancelled")}><XCircle className="h-3.5 w-3.5" /> Cancelar</Btn>
-                          <Btn size="sm" variant="success" onClick={() => setStatus(po.id, "received")}><PackageCheck className="h-3.5 w-3.5" /> Recibir</Btn>
+                          <Btn size="sm" variant="success" onClick={() => openReceive(po)}><PackageCheck className="h-3.5 w-3.5" /> Recibir</Btn>
                         </>
                       )}
                       {po.status !== "received" && (
@@ -206,7 +264,14 @@ export default function PurchaseOrders() {
       >
         {modal && (
           <div className="space-y-4">
-            <Field label="Proveedor"><Input value={modal.supplier} onChange={(e) => setModal({ ...modal, supplier: e.target.value })} /></Field>
+            <Field label="Proveedor">
+              <Select value={modal.supplier} onChange={(e) => setModal({ ...modal, supplier: e.target.value })}>
+                <option value="">Selecciona un proveedor…</option>
+                {suppliers.map((s) => (
+                  <option key={s.id} value={s.name}>{s.name}</option>
+                ))}
+              </Select>
+            </Field>
             <div>
               <div className="flex items-center justify-between mb-2">
                 <p className="text-sm text-textMain font-medium">Insumos</p>
@@ -232,6 +297,58 @@ export default function PurchaseOrders() {
               <span className="text-textMain">Total estimado</span>
               <span className="font-mono font-bold text-money">{money(modalTotal, currency)}</span>
             </div>
+          </div>
+        )}
+      </Modal>
+
+      <Modal
+        open={!!receiveModal}
+        onClose={() => !saving && setReceiveModal(null)}
+        title={receiveModal ? `Confirmar recepción de ${receiveModal.po_number}` : "Confirmar recepción"}
+        footer={
+          <>
+            <Btn variant="ghost" onClick={() => setReceiveModal(null)} disabled={saving}>Cancelar</Btn>
+            <Btn variant="success" loading={saving} onClick={confirmReceive}><PackageCheck className="h-4 w-4" /> Confirmar recepción</Btn>
+          </>
+        }
+      >
+        {receiveModal && (
+          <div className="space-y-3">
+            <p className="text-xs text-textDim">
+              Captura la cantidad realmente recibida por insumo. Puede diferir de lo pedido.
+            </p>
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-textDim">
+                  <th className="py-1 font-medium">Insumo</th>
+                  <th className="py-1 font-medium text-right">Pedido</th>
+                  <th className="py-1 font-medium text-right">Recibido</th>
+                </tr>
+              </thead>
+              <tbody>
+                {receiveModal.items.map((it, i) => {
+                  const diff = Number(it.received_qty || 0) !== Number(it.ordered_qty);
+                  return (
+                    <tr key={it.material_id} className="text-textMain">
+                      <td className="py-1">{it.name}</td>
+                      <td className="py-1 text-right font-mono text-textDim">{num(it.ordered_qty, 2)} {it.unit}</td>
+                      <td className="py-1 text-right">
+                        <Input
+                          type="number"
+                          step="0.001"
+                          value={it.received_qty}
+                          onChange={(e) => setReceivedQty(i, e.target.value)}
+                          className={`w-24 text-right font-mono ${diff ? "text-amber-400 border-amber-500/50" : ""}`}
+                        />
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            <p className="text-xs text-amber-400/80">
+              Los renglones en ámbar tienen una cantidad recibida distinta a la pedida.
+            </p>
           </div>
         )}
       </Modal>
