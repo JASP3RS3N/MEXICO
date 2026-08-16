@@ -16,7 +16,7 @@ from config import (
     now_iso,
     tenant_query,
 )
-from models import OrderCreate, PaymentRequest, PinTagRequest
+from models import SALES_CHANNELS, OrderCreate, PaymentRequest, PinTagRequest
 from security import get_current_user, get_tenant_id, require_pin_session, require_roles
 from orders_service import settle_order
 
@@ -62,6 +62,12 @@ async def _resolve_tenant_by_slug(slug: str) -> str:
     if not tenant:
         raise HTTPException(status_code=404, detail="Tenant no encontrado")
     return tenant["id"]
+
+
+@router.get("/sales-channels")
+async def sales_channels(user: dict = Depends(get_current_user)):
+    """Catalog of sales channels (mostrador, teléfono, apps de delivery) with su comisión por defecto."""
+    return SALES_CHANNELS
 
 
 # ---------------------------------------------------------------------------

@@ -160,6 +160,23 @@ WASTE_REASONS = [
 # ---------------------------------------------------------------------------
 # Orders (comandas / tickets)
 # ---------------------------------------------------------------------------
+class SalesChannel(BaseModel):
+    code: str
+    label: str
+    commission_rate: float
+
+
+# Catalog of sales channels (código, etiqueta, tasa de comisión por defecto).
+# Not tenant-scoped today — a fixed list shared by all tenants.
+SALES_CHANNELS = [
+    {"code": "counter", "label": "Mostrador", "commission_rate": 0.0},
+    {"code": "phone", "label": "Teléfono", "commission_rate": 0.0},
+    {"code": "uber_eats", "label": "Uber Eats", "commission_rate": 0.28},
+    {"code": "rappi", "label": "Rappi", "commission_rate": 0.27},
+    {"code": "didi_food", "label": "DiDi Food", "commission_rate": 0.25},
+]
+
+
 class OrderItemInput(BaseModel):
     product_id: str
     qty: int = 1
