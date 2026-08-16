@@ -190,6 +190,7 @@ class OrderCreate(BaseModel):
     table: Optional[str] = ""
     order_type: str = "comer_aqui"  # comer_aqui | para_llevar
     notes: Optional[str] = ""
+    sales_channel_code: str = "counter"  # code from SALES_CHANNELS: counter, phone, uber_eats, rappi, didi_food
 
 
 class OrderStatusUpdate(BaseModel):

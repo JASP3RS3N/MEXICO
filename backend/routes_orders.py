@@ -111,6 +111,12 @@ async def create_order(payload: OrderCreate, user: dict = Depends(require_roles(
     totals = _compute_totals(gross, settings)
     seq = await next_sequence("order", tenant_id)
 
+    # Sales channel + its commission rate (from the catalog), snapshotted onto
+    # the order so historical commission math doesn't shift if the catalog changes later.
+    channel_code = payload.sales_channel_code or "counter"
+    channel_rates = {c["code"]: c["commission_rate"] for c in SALES_CHANNELS}
+    commission_rate = channel_rates.get(channel_code, 0.0)
+
     doc = {
         "id": gen_id(),
         "tenant_id": tenant_id,
@@ -119,6 +125,8 @@ async def create_order(payload: OrderCreate, user: dict = Depends(require_roles(
         "table": (payload.table or "").strip(),
         "order_type": payload.order_type or "comer_aqui",
         "notes": payload.notes or "",
+        "sales_channel_code": channel_code,
+        "commission_rate": commission_rate,
         "items": items,
         "subtotal": totals["subtotal"],
         "tax": totals["tax"],

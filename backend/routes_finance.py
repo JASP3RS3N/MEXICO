@@ -79,6 +79,14 @@ async def profit_and_loss(
     orders = await _paid_orders(start, end, tenant_id)
     agg = _aggregate(orders)
 
+    # Channel commission (Uber Eats, Rappi, DiDi Food, etc.): subtotal × commission_rate
+    # snapshotted per order at creation time. Orders sold at the counter/phone have
+    # commission_rate 0, so they don't affect this.
+    commission_total = round(
+        sum(float(o.get("subtotal", 0)) * float(o.get("commission_rate", 0) or 0) for o in orders), 2
+    )
+    net_revenue_after_commission = round(agg["net_sales"] - commission_total, 2)
+
     expenses = await db.expenses.find(
         tenant_query(tenant_id, {"date": {"$gte": start[:10], "$lte": end[:10]}}), {"_id": 0}
     ).to_list(5000)
@@ -132,6 +140,8 @@ async def profit_and_loss(
         "gross_sales": agg["gross_sales"],
         "tax_collected": agg["tax"],
         "cogs": agg["cogs"],
+        "commission_total": commission_total,
+        "net_revenue_after_commission": net_revenue_after_commission,
         "gross_profit": gross_profit,
         "gross_margin": round(gross_profit / agg["net_sales"] * 100, 1) if agg["net_sales"] else 0.0,
         "operating_expenses": opex,
