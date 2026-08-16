@@ -135,6 +135,26 @@ class MaterialUpdate(BaseModel):
 class StockAdjust(BaseModel):
     qty: float  # positive to add, negative to remove
     reason: Optional[str] = "Ajuste manual"
+    waste_reason_code: Optional[str] = None  # required when qty < 0 (merma); must match WASTE_REASONS
+
+
+class WasteReason(BaseModel):
+    id: str
+    code: str
+    label: str
+    active: bool = True
+
+
+# Catalog of standard waste/shrink reasons (código, etiqueta). Not tenant-scoped
+# today — a fixed list shared by all tenants.
+WASTE_REASONS = [
+    {"code": "overproduction", "label": "Sobreproducción"},
+    {"code": "spoilage", "label": "Descomposición / caducidad"},
+    {"code": "kitchen_error", "label": "Error de cocina"},
+    {"code": "customer_return", "label": "Devolución de cliente"},
+    {"code": "dropped_damaged", "label": "Caída o daño físico"},
+    {"code": "other", "label": "Otro"},
+]
 
 
 # ---------------------------------------------------------------------------

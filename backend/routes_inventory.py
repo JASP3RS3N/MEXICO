@@ -18,6 +18,7 @@ from config import (
     tenant_query,
 )
 from models import (
+    WASTE_REASONS,
     MaterialCreate,
     MaterialUpdate,
     POStatusUpdate,
@@ -30,24 +31,42 @@ from alerts import check_stale_supplier_prices, maybe_low_stock_alert, scan_all_
 router = APIRouter()
 
 
-async def _record_movement(material_id: str, mtype: str, qty: float, reference: str, user_id: str, tenant_id: str):
-    await db.inventory_movements.insert_one(
-        {
-            "id": gen_id(),
-            "tenant_id": tenant_id,
-            "material_id": material_id,
-            "type": mtype,  # purchase | consumption | adjustment
-            "qty": qty,
-            "reference": reference,
-            "user_id": user_id,
-            "created_at": now_iso(),
-        }
-    )
+async def _record_movement(
+    material_id: str,
+    mtype: str,
+    qty: float,
+    reference: str,
+    user_id: str,
+    tenant_id: str,
+    waste_reason_code: str = None,
+):
+    doc = {
+        "id": gen_id(),
+        "tenant_id": tenant_id,
+        "material_id": material_id,
+        "type": mtype,  # purchase | consumption | adjustment
+        "qty": qty,
+        "reference": reference,
+        "user_id": user_id,
+        "created_at": now_iso(),
+    }
+    # Only recorded for waste/shrink adjustments — omitted entirely otherwise,
+    # so movements from other callers (purchase receiving, initial stock) are
+    # unchanged.
+    if waste_reason_code:
+        doc["waste_reason_code"] = waste_reason_code
+    await db.inventory_movements.insert_one(doc)
 
 
 # ---------------------------------------------------------------------------
 # Materials master data
 # ---------------------------------------------------------------------------
+@router.get("/materials/waste-reasons")
+async def waste_reasons(user: dict = Depends(require_roles("owner", "prep"))):
+    """Catalog of standard waste/shrink reasons for stock adjustments."""
+    return WASTE_REASONS
+
+
 @router.get("/materials")
 async def list_materials(user: dict = Depends(require_roles("owner", "prep"))):
     tenant_id = get_tenant_id(user)
@@ -118,11 +137,28 @@ async def adjust_stock(material_id: str, payload: StockAdjust, user: dict = Depe
     material = await db.materials.find_one(tenant_query(tenant_id, {"id": material_id}))
     if not material:
         raise HTTPException(status_code=404, detail="Materia prima no encontrada")
+
+    # A negative adjustment here is shrink/waste (this endpoint always records
+    # type "adjustment" — sale-driven consumption goes through a separate path
+    # in orders_service.py). Require a valid reason code from the catalog.
+    if float(payload.qty) < 0:
+        valid_codes = {r["code"] for r in WASTE_REASONS}
+        if not payload.waste_reason_code or payload.waste_reason_code not in valid_codes:
+            raise HTTPException(status_code=400, detail="Selecciona una razón de merma válida para un ajuste negativo")
+
     new_stock = float(material.get("current_stock", 0)) + float(payload.qty)
     await db.materials.update_one(
         tenant_query(tenant_id, {"id": material_id}), {"$set": {"current_stock": new_stock, "updated_at": now_iso()}}
     )
-    await _record_movement(material_id, "adjustment", float(payload.qty), payload.reason or "Ajuste", user["id"], tenant_id)
+    await _record_movement(
+        material_id,
+        "adjustment",
+        float(payload.qty),
+        payload.reason or "Ajuste",
+        user["id"],
+        tenant_id,
+        waste_reason_code=payload.waste_reason_code,
+    )
     # A manual adjustment (merma, corrección, recepción) can push stock at/below
     # minimum just like a sale — same reactive alert check either way.
     await maybe_low_stock_alert(material_id)
