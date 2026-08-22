@@ -1,5 +1,6 @@
 """Pydantic request/response models for the Smokehouse API."""
 import re
+from datetime import datetime
 from typing import List, Optional
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
@@ -78,6 +79,11 @@ class ProductCreate(BaseModel):
     track_stock: bool = False
     current_stock: float = 0.0
     min_stock: float = 0.0
+    # CFDI 4.0 (FiscalAPI): mapping to the fiscal catalog item + SAT codes, used
+    # when an order containing this product is invoiced. Data model only for now.
+    fiscal_item_id: Optional[str] = None
+    sat_product_code: Optional[str] = None  # SAT c_ClaveProdServ
+    sat_unit_code: Optional[str] = None  # SAT c_ClaveUnidad
 
 
 class ProductUpdate(BaseModel):
@@ -191,6 +197,9 @@ class OrderCreate(BaseModel):
     order_type: str = "comer_aqui"  # comer_aqui | para_llevar
     notes: Optional[str] = ""
     sales_channel_code: str = "counter"  # code from SALES_CHANNELS: counter, phone, uber_eats, rappi, didi_food
+    # CFDI 4.0 (FiscalAPI): whether/how this order has been invoiced. Data model
+    # only for now — not enforced or transitioned by any endpoint yet.
+    invoice_status: str = "not_requested"  # not_requested | requested | stamped | cancelled | failed
 
 
 class OrderStatusUpdate(BaseModel):
@@ -368,6 +377,35 @@ class EmployeeTerminate(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Fiscal (facturación CFDI 4.0 vía FiscalAPI) — solo modelo de datos, sin
+# lógica de negocio ni llamadas a la API externa todavía.
+# ---------------------------------------------------------------------------
+class FiscalConfig(BaseModel):
+    enabled: bool = False
+    fiscalapi_api_key: Optional[str] = None
+    fiscalapi_tenant_key: Optional[str] = None
+    fiscalapi_environment: str = "test"  # test | production
+    issuer_person_id: Optional[str] = None
+    generic_recipient_id: Optional[str] = None
+    expedition_zip_code: Optional[str] = None
+    default_cfdi_use: str = "S01"  # SAT c_UsoCFDI
+    tax_regime_code: Optional[str] = None  # SAT c_RegimenFiscal
+
+
+class Invoice(BaseModel):
+    id: str
+    tenant_id: str
+    order_id: str
+    fiscalapi_invoice_id: Optional[str] = None
+    uuid: Optional[str] = None
+    status: str  # stamped | cancelled | failed
+    cancellation_reason_code: Optional[str] = None
+    recipient_type: str  # generic | specific
+    total: float
+    created_at: datetime
+
+
+# ---------------------------------------------------------------------------
 # Tenants (multi-tenant)
 # ---------------------------------------------------------------------------
 class TenantCreate(BaseModel):
@@ -384,6 +422,7 @@ class TenantUpdate(BaseModel):
     slug: Optional[str] = None
     plan: Optional[str] = None
     active: Optional[bool] = None
+    fiscal_config: Optional[FiscalConfig] = None
 
 
 # ---------------------------------------------------------------------------
