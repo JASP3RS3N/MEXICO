@@ -34,11 +34,26 @@ def auth(username, password):
     return {"Authorization": f"Bearer {r.json()['token']}"}
 
 
+def auth_pin(owner_headers, username):
+    """Cashier/prep now log in by PIN (see commit 0c81b7e): find the user,
+    issue them a PIN (seed users start with pin=None), then swap this
+    device's session to that PIN via /auth/login-pin. Returns (headers, pin)
+    so callers can also reuse the PIN itself (e.g. PinTagRequest bodies)."""
+    users = client.get("/api/users", headers=owner_headers).json()
+    target = next(u for u in users if u["username"] == username)
+    r = client.post(f"/api/users/{target['id']}/regenerate-pin", headers=owner_headers)
+    assert r.status_code == 200, f"regenerate-pin {username} -> {r.status_code} {r.text}"
+    pin = r.json()["pin"]
+    r = client.post("/api/auth/login-pin", headers=owner_headers, json={"pin": pin})
+    assert r.status_code == 200, f"login-pin {username} -> {r.status_code} {r.text}"
+    return {"Authorization": f"Bearer {r.json()['token']}"}, pin
+
+
 with client:  # triggers startup (seed)
     print("\n== Auth & RBAC ==")
     owner = auth("dueno", "dueno123")
-    cashier = auth("caja", "caja123")
-    prep = auth("cocina", "cocina123")
+    cashier, cashier_pin = auth_pin(owner, "caja")
+    prep, prep_pin = auth_pin(owner, "cocina")
 
     check("bad login rejected", client.post("/api/auth/login", json={"username": "dueno", "password": "x"}).status_code == 401)
     check("me returns owner role", client.get("/api/auth/me", headers=owner).json()["user"]["role"] == "owner")
@@ -90,12 +105,12 @@ with client:  # triggers startup (seed)
     check("kitchen hides prices", all("price" not in i for o in kq for i in o["items"]))
 
     # public display (no auth)
-    disp = client.get("/api/display").json()
+    disp = client.get("/api/display", params={"tenant": "demo"}).json()
     check("public display shows order, no money", any(o["order_number"] == order["order_number"] for o in disp) and all("total" not in o for o in disp))
 
     # prep flow
-    check("prep accepts order", client.post(f"/api/orders/{order['id']}/accept", headers=prep).status_code == 200)
-    check("cannot re-accept order", client.post(f"/api/orders/{order['id']}/accept", headers=prep).status_code == 400)
+    check("prep accepts order", client.post(f"/api/orders/{order['id']}/accept", headers=prep, json={"pin": prep_pin}).status_code == 200)
+    check("cannot re-accept order", client.post(f"/api/orders/{order['id']}/accept", headers=prep, json={"pin": prep_pin}).status_code == 400)
     check("prep marks ready", client.post(f"/api/orders/{order['id']}/ready", headers=prep).status_code == 200)
 
     # payment + inventory deduction
@@ -119,6 +134,7 @@ with client:  # triggers startup (seed)
     check("PO numbered", po["po_number"].startswith("OC-"))
     check("PO total", po["total"] == 1000.0)
     stock_before_po = next(m["current_stock"] for m in client.get("/api/materials", headers=owner).json() if m["id"] == low_mat["id"])
+    check("PO marked ordered", client.put(f"/api/purchase-orders/{po['id']}/status", headers=owner, json={"status": "ordered"}).status_code == 200)
     check("receiving PO adds stock", client.put(f"/api/purchase-orders/{po['id']}/status", headers=owner, json={"status": "received"}).status_code == 200)
     stock_after_po = next(m["current_stock"] for m in client.get("/api/materials", headers=owner).json() if m["id"] == low_mat["id"])
     check("stock increased by received qty", stock_after_po == stock_before_po + 10)
