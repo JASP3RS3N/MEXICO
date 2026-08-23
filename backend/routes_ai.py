@@ -33,10 +33,9 @@ REQUEST_TIMEOUT = float(os.environ.get("AI_TIMEOUT", "180"))
 
 # Firecrawl web search/scrape, wired in via LM Studio's ephemeral MCP mechanism
 # (LM Studio 0.4.0+, "integrations" field on the chat/completions request body —
-# no mcp.json entry needed). Never hardcoded; sent only when configured, so an
-# install without Firecrawl set up behaves exactly as before.
-FIRECRAWL_API_KEY = os.environ.get("FIRECRAWL_API_KEY", "").strip()
-FIRECRAWL_MCP_URL = "http://localhost:3000/mcp"
+# no mcp.json entry needed). Empty = feature off, so an install that hasn't set
+# this up behaves exactly as before. Self-hosted instance, no auth required.
+FIRECRAWL_MCP_URL = os.environ.get("FIRECRAWL_MCP_URL", "")
 
 KNOWN_TOOLS = {t["function"]["name"] for t in TOOLS}
 WRITE_TOOLS = {
@@ -162,15 +161,14 @@ def _normalize_calls(msg: dict):
 def _firecrawl_integrations():
     """Ephemeral MCP block for LM Studio's request body, giving the model
     Firecrawl's web search/scrape tools for this call only. Returns None
-    (omit the field entirely) when FIRECRAWL_API_KEY isn't set."""
-    if not FIRECRAWL_API_KEY:
+    (omit the field entirely) when FIRECRAWL_MCP_URL isn't set."""
+    if not FIRECRAWL_MCP_URL:
         return None
     return [
         {
             "type": "ephemeral_mcp",
             "server_label": "firecrawl",
             "url": FIRECRAWL_MCP_URL,
-            "headers": {"Authorization": f"Bearer {FIRECRAWL_API_KEY}"},
             "allowed_tools": ["firecrawl_search", "firecrawl_scrape"],
         }
     ]
