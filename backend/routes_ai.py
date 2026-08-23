@@ -31,6 +31,13 @@ LMSTUDIO_API_KEY = os.environ.get("LMSTUDIO_API_KEY", "lm-studio")
 MAX_TOOL_ROUNDS = int(os.environ.get("AI_MAX_TOOL_ROUNDS", "6"))
 REQUEST_TIMEOUT = float(os.environ.get("AI_TIMEOUT", "180"))
 
+# Firecrawl web search/scrape, wired in via LM Studio's ephemeral MCP mechanism
+# (LM Studio 0.4.0+, "integrations" field on the chat/completions request body —
+# no mcp.json entry needed). Never hardcoded; sent only when configured, so an
+# install without Firecrawl set up behaves exactly as before.
+FIRECRAWL_API_KEY = os.environ.get("FIRECRAWL_API_KEY", "").strip()
+FIRECRAWL_MCP_URL = "http://localhost:3000/mcp"
+
 KNOWN_TOOLS = {t["function"]["name"] for t in TOOLS}
 WRITE_TOOLS = {
     "create_purchase_order", "create_order", "update_product_price",
@@ -152,6 +159,23 @@ def _normalize_calls(msg: dict):
     return _parse_text_tool_calls(msg.get("content") or ""), False
 
 
+def _firecrawl_integrations():
+    """Ephemeral MCP block for LM Studio's request body, giving the model
+    Firecrawl's web search/scrape tools for this call only. Returns None
+    (omit the field entirely) when FIRECRAWL_API_KEY isn't set."""
+    if not FIRECRAWL_API_KEY:
+        return None
+    return [
+        {
+            "type": "ephemeral_mcp",
+            "server_label": "firecrawl",
+            "url": FIRECRAWL_MCP_URL,
+            "headers": {"Authorization": f"Bearer {FIRECRAWL_API_KEY}"},
+            "allowed_tools": ["firecrawl_search", "firecrawl_scrape"],
+        }
+    ]
+
+
 async def _resolve_model(client: httpx.AsyncClient) -> str:
     if LMSTUDIO_MODEL:
         return LMSTUDIO_MODEL
@@ -202,6 +226,9 @@ async def ai_chat(payload: ChatRequest, user: dict = Depends(require_owner)):
         if with_tools:
             b["tools"] = TOOLS
             b["tool_choice"] = "auto"
+        integrations = _firecrawl_integrations()
+        if integrations:
+            b["integrations"] = integrations
         r = await client.post(f"{LMSTUDIO_BASE_URL}/chat/completions", headers=headers, json=b)
         r.raise_for_status()
         return r.json()["choices"][0]["message"]
