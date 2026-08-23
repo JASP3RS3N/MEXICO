@@ -13,6 +13,7 @@ import {
   Settings,
   Monitor,
   LogOut,
+  Pause,
   Menu as MenuIcon,
   X,
   Flame,
@@ -24,6 +25,7 @@ import {
 import { useAuth, ROLE_LABELS } from "@/context/AuthContext";
 import api from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { Modal, Btn } from "@/components/kit";
 
 const NAV = [
   { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard, roles: ["owner"] },
@@ -43,12 +45,14 @@ const NAV = [
 ];
 
 export default function Layout({ children }) {
-  const { user, logout, endShift } = useAuth();
+  const { user, logout, endShift, pauseSession } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const [open, setOpen] = useState(false);
   const [brand, setBrand] = useState("Smokehouse");
   const [alertCount, setAlertCount] = useState(0);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [confirmLogoutOpen, setConfirmLogoutOpen] = useState(false);
 
   useEffect(() => {
     api
@@ -69,16 +73,25 @@ export default function Layout({ children }) {
 
   const items = NAV.filter((n) => n.roles.includes(user?.role));
 
-  const handleLogout = () => {
-    // Cashier/prep only end their shift (device stays activated for the next
-    // PIN login); the owner's logout deactivates the device entirely.
-    if (user?.role === "cashier" || user?.role === "prep") {
-      endShift();
-      navigate("/pin");
-    } else {
-      logout();
-      navigate("/login");
-    }
+  // Cashier/prep only end their shift (device stays activated for the next
+  // PIN login). The owner has two separate actions instead (see the
+  // dropdown below): pausing (same effect, different entry point) and a
+  // full, confirmed logout that deactivates the device.
+  const handleEndShift = () => {
+    endShift();
+    navigate("/pin");
+  };
+
+  const handlePauseSession = () => {
+    setMenuOpen(false);
+    pauseSession();
+    navigate("/login");
+  };
+
+  const handleFullLogoutConfirmed = () => {
+    setConfirmLogoutOpen(false);
+    logout();
+    navigate("/login");
   };
 
   const SidebarContent = (
@@ -139,13 +152,50 @@ export default function Layout({ children }) {
             <p className="text-textBright text-sm font-medium truncate">{user?.name}</p>
             <p className="text-textDim text-xs">{ROLE_LABELS[user?.role] || user?.role}</p>
           </div>
-          <button
-            onClick={handleLogout}
-            title={user?.role === "cashier" || user?.role === "prep" ? "Terminar turno" : "Cerrar sesión"}
-            className="text-textDim hover:text-red-400 transition p-1.5"
-          >
-            <LogOut className="h-[18px] w-[18px]" />
-          </button>
+          {user?.role === "owner" ? (
+            <div className="relative shrink-0">
+              <button
+                onClick={() => setMenuOpen((v) => !v)}
+                title="Sesión"
+                className="text-textDim hover:text-textBright transition p-1.5"
+              >
+                <LogOut className="h-[18px] w-[18px]" />
+              </button>
+              {menuOpen && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setMenuOpen(false)} />
+                  <div className="absolute bottom-full right-0 mb-2 w-56 bg-surface border border-border rounded-xl shadow-2xl overflow-hidden z-50">
+                    <button
+                      onClick={handlePauseSession}
+                      className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-sm text-textMain hover:bg-surface2 hover:text-textBright transition"
+                    >
+                      <Pause className="h-4 w-4 shrink-0" />
+                      <span>Pausar sesión</span>
+                    </button>
+                    <button
+                      onClick={() => {
+                        setMenuOpen(false);
+                        setConfirmLogoutOpen(true);
+                      }}
+                      className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-sm text-red-400 hover:bg-red-500/10 transition border-t border-border"
+                    >
+                      <LogOut className="h-4 w-4 shrink-0" />
+                      <span>Cerrar sesión por completo</span>
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          ) : (
+            <button
+              onClick={handleEndShift}
+              title="Terminar turno"
+              className="text-textDim hover:text-red-400 transition p-1.5 flex items-center gap-1.5 shrink-0"
+            >
+              <LogOut className="h-[18px] w-[18px]" />
+              <span className="hidden lg:inline text-xs font-medium">Terminar turno</span>
+            </button>
+          )}
         </div>
       </div>
     </div>
@@ -182,6 +232,27 @@ export default function Layout({ children }) {
 
         <main className="p-4 sm:p-6 lg:p-8 max-w-[1400px] mx-auto">{children}</main>
       </div>
+
+      <Modal
+        open={confirmLogoutOpen}
+        onClose={() => setConfirmLogoutOpen(false)}
+        title="Cerrar sesión por completo"
+        footer={
+          <>
+            <Btn variant="ghost" onClick={() => setConfirmLogoutOpen(false)}>
+              Cancelar
+            </Btn>
+            <Btn variant="danger" onClick={handleFullLogoutConfirmed}>
+              Sí, cerrar sesión por completo
+            </Btn>
+          </>
+        }
+      >
+        <p className="text-sm text-textMain">
+          Esto desactivará este dispositivo por completo. Para volver a usarlo, tendrás que iniciar sesión de nuevo
+          con tu usuario y contraseña. ¿Confirmas cerrar sesión por completo?
+        </p>
+      </Modal>
     </div>
   );
 }

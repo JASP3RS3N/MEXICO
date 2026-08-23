@@ -78,6 +78,15 @@ export function AuthProvider({ children }) {
     setUser(null);
   };
 
+  // Owner-only "pause": same effect as endShift today (clears the active
+  // identity, keeps the device activated), but kept as its own function
+  // because it's a distinct concept from an employee's shift — they may
+  // diverge later (e.g. a pause-specific timeout or audit log).
+  const pauseSession = () => {
+    clearToken();
+    setUser(null);
+  };
+
   // Full logout: clears the active identity AND deactivates the device.
   const logout = () => {
     clearToken();
@@ -90,7 +99,7 @@ export function AuthProvider({ children }) {
 
   return (
     <AuthContext.Provider
-      value={{ user, loading, login, loginPin, endShift, logout, hasRole, deviceActivated }}
+      value={{ user, loading, login, loginPin, endShift, pauseSession, logout, hasRole, deviceActivated }}
     >
       {children}
     </AuthContext.Provider>
