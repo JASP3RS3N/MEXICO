@@ -244,6 +244,22 @@ class POStatusUpdate(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Fiscal (facturación CFDI 4.0 vía FiscalAPI) — config only, defined here (ahead
+# of SettingsUpdate/TenantUpdate below, both of which embed it).
+# ---------------------------------------------------------------------------
+class FiscalConfig(BaseModel):
+    enabled: bool = False
+    fiscalapi_api_key: Optional[str] = None
+    fiscalapi_tenant_key: Optional[str] = None
+    fiscalapi_environment: str = "test"  # test | production
+    issuer_person_id: Optional[str] = None
+    generic_recipient_id: Optional[str] = None
+    expedition_zip_code: Optional[str] = None
+    default_cfdi_use: str = "S01"  # SAT c_UsoCFDI
+    tax_regime_code: Optional[str] = None  # SAT c_RegimenFiscal
+
+
+# ---------------------------------------------------------------------------
 # Expenses (gastos operativos) & settings
 # ---------------------------------------------------------------------------
 class ExpenseCreate(BaseModel):
@@ -258,6 +274,7 @@ class SettingsUpdate(BaseModel):
     currency: Optional[str] = None
     tax_rate: Optional[float] = None  # e.g. 0.16 for 16% IVA
     tax_included: Optional[bool] = None  # whether prices already include tax
+    fiscal_config: Optional[FiscalConfig] = None
     # Theme colors (hex, e.g. "#080c14"); empty/None = default palette.
     theme_bg: Optional[str] = None
     theme_sidebar: Optional[str] = None
@@ -377,21 +394,9 @@ class EmployeeTerminate(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Fiscal (facturación CFDI 4.0 vía FiscalAPI) — solo modelo de datos, sin
-# lógica de negocio ni llamadas a la API externa todavía.
+# Fiscal (facturación CFDI 4.0 vía FiscalAPI), continuación — FiscalConfig
+# itself lives earlier (before SettingsUpdate, which embeds it).
 # ---------------------------------------------------------------------------
-class FiscalConfig(BaseModel):
-    enabled: bool = False
-    fiscalapi_api_key: Optional[str] = None
-    fiscalapi_tenant_key: Optional[str] = None
-    fiscalapi_environment: str = "test"  # test | production
-    issuer_person_id: Optional[str] = None
-    generic_recipient_id: Optional[str] = None
-    expedition_zip_code: Optional[str] = None
-    default_cfdi_use: str = "S01"  # SAT c_UsoCFDI
-    tax_regime_code: Optional[str] = None  # SAT c_RegimenFiscal
-
-
 class Invoice(BaseModel):
     id: str
     tenant_id: str

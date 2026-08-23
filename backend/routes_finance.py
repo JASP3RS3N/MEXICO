@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, Query
 
 from config import ORDER_PAID, clean, db, gen_id, now, now_iso, tenant_query
+from crypto_utils import encrypt_value
 from models import ExpenseCreate, SettingsUpdate
 from security import get_current_user, get_tenant_id, require_owner
 
@@ -355,11 +356,22 @@ async def delete_expense(expense_id: str, user: dict = Depends(require_owner)):
 # ---------------------------------------------------------------------------
 # Settings
 # ---------------------------------------------------------------------------
+def _scrub_fiscal_config(doc: dict) -> dict:
+    """Never let fiscalapi_api_key/fiscalapi_tenant_key reach the client, even
+    encrypted — replace them with booleans reporting whether each is set."""
+    if not doc or not doc.get("fiscal_config"):
+        return doc
+    fc = dict(doc["fiscal_config"])
+    fc["api_key_configured"] = fc.pop("fiscalapi_api_key", None) is not None
+    fc["tenant_key_configured"] = fc.pop("fiscalapi_tenant_key", None) is not None
+    return {**doc, "fiscal_config": fc}
+
+
 @router.get("/settings")
 async def get_settings(user: dict = Depends(get_current_user)):
     tenant_id = get_tenant_id(user)
     s = await db.settings.find_one(tenant_query(tenant_id, {"id": "settings"}), {"_id": 0})
-    return s or {
+    s = s or {
         "id": "settings",
         "tenant_id": tenant_id,
         "restaurant_name": "Smokehouse",
@@ -367,15 +379,28 @@ async def get_settings(user: dict = Depends(get_current_user)):
         "tax_rate": 0.16,
         "tax_included": True,
     }
+    return _scrub_fiscal_config(s)
 
 
 @router.put("/settings")
 async def update_settings(payload: SettingsUpdate, user: dict = Depends(require_owner)):
     tenant_id = get_tenant_id(user)
     updates = {k: v for k, v in payload.model_dump(exclude_unset=True).items() if v is not None}
+
+    # Fiscal credentials are encrypted at rest. Everything else in fiscal_config
+    # (environment, issuer/recipient ids, expedition zip, cfdi use, tax regime,
+    # enabled) is stored as sent.
+    fiscal_config = updates.get("fiscal_config")
+    if fiscal_config is not None:
+        if fiscal_config.get("fiscalapi_api_key") is not None:
+            fiscal_config["fiscalapi_api_key"] = encrypt_value(fiscal_config["fiscalapi_api_key"])
+        if fiscal_config.get("fiscalapi_tenant_key") is not None:
+            fiscal_config["fiscalapi_tenant_key"] = encrypt_value(fiscal_config["fiscalapi_tenant_key"])
+
     await db.settings.update_one(
         tenant_query(tenant_id, {"id": "settings"}),
         {"$set": updates, "$setOnInsert": {"tenant_id": tenant_id, "id": "settings"}},
         upsert=True,
     )
-    return await db.settings.find_one(tenant_query(tenant_id, {"id": "settings"}), {"_id": 0})
+    fresh = await db.settings.find_one(tenant_query(tenant_id, {"id": "settings"}), {"_id": 0})
+    return _scrub_fiscal_config(fresh)
