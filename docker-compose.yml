@@ -38,6 +38,9 @@ services:
       PAYMENTS_WEBHOOK_SECRET: "cambia-este-secreto"
       # Opcional: URL a la que se envían las alertas de bajo stock (n8n/WhatsApp). Vacío = solo en la app.
       ALERT_WEBHOOK_URL: ""
+      # --- Fiscal (CFDI 4.0) / Asistente IA: búsqueda web ---
+      FISCAL_ENCRYPTION_KEY: ${FISCAL_ENCRYPTION_KEY}
+      FIRECRAWL_MCP_URL: ${FIRECRAWL_MCP_URL}
     extra_hosts:
       # Permite que el contenedor llegue a LM Studio corriendo en el host.
       - "host.docker.internal:host-gateway"
