@@ -24,6 +24,8 @@ from models import (
     POStatusUpdate,
     PurchaseOrderCreate,
     StockAdjust,
+    SupplierOfferingCreate,
+    SupplierOfferingUpdate,
 )
 from security import get_current_user, get_tenant_id, require_owner, require_roles
 from alerts import check_stale_supplier_prices, maybe_low_stock_alert, scan_all_low_stock
@@ -193,6 +195,111 @@ async def movements(material_id: str = None, user: dict = Depends(require_owner)
     extra = {"material_id": material_id} if material_id else {}
     docs = await db.inventory_movements.find(tenant_query(tenant_id, extra), {"_id": 0}).sort("created_at", -1).to_list(500)
     return docs
+
+
+# ---------------------------------------------------------------------------
+# Supplier offerings (proveedor × insumo): a material can be sourced from
+# several suppliers, each with its own cost/MOQ/lead time. Replaces the role
+# the old free-text Material.supplier field used to play — not wired into
+# alerts.py/ai_tools.py/server.py/PurchaseOrders.js yet, that's a later step.
+# ---------------------------------------------------------------------------
+async def _offering_with_supplier_name(offering: dict, tenant_id: str) -> dict:
+    """Denormalize the supplier's name onto an offering for display, same way
+    PO items carry the material's name alongside its id."""
+    supplier = await db.suppliers.find_one(tenant_query(tenant_id, {"id": offering["supplier_id"]}), {"_id": 0, "name": 1})
+    return {**offering, "supplier_name": supplier["name"] if supplier else ""}
+
+
+@router.post("/supplier-offerings")
+async def create_supplier_offering(payload: SupplierOfferingCreate, user: dict = Depends(require_owner)):
+    tenant_id = get_tenant_id(user)
+    supplier = await db.suppliers.find_one(tenant_query(tenant_id, {"id": payload.supplier_id}))
+    if not supplier:
+        raise HTTPException(status_code=404, detail="Proveedor no encontrado")
+    material = await db.materials.find_one(tenant_query(tenant_id, {"id": payload.material_id}))
+    if not material:
+        raise HTTPException(status_code=404, detail="Materia prima no encontrada")
+
+    # One active offering per (supplier, material) pair — otherwise "the
+    # cheapest offering for this material" would be ambiguous between two
+    # rows from the same supplier.
+    existing = await db.supplier_offerings.find_one(
+        tenant_query(
+            tenant_id,
+            {"supplier_id": payload.supplier_id, "material_id": payload.material_id, "active": True},
+        )
+    )
+    if existing:
+        raise HTTPException(status_code=409, detail="Ya existe una oferta activa de este proveedor para este insumo")
+
+    doc = {
+        "id": gen_id(),
+        "tenant_id": tenant_id,
+        "supplier_id": payload.supplier_id,
+        "material_id": payload.material_id,
+        "cost_per_unit": round(float(payload.cost_per_unit), 4),
+        "min_order": float(payload.min_order),
+        "lead_time_days": int(payload.lead_time_days),
+        # Same pattern as Material.last_price_update: stamped at creation,
+        # restamped only when cost_per_unit actually changes (see below).
+        "last_price_update": now_iso()[:10],
+        "active": payload.active,
+        "created_at": now_iso(),
+        "updated_at": now_iso(),
+    }
+    await db.supplier_offerings.insert_one(doc)
+    return clean(await _offering_with_supplier_name(doc, tenant_id))
+
+
+@router.get("/supplier-offerings")
+async def list_supplier_offerings(user: dict = Depends(require_owner)):
+    tenant_id = get_tenant_id(user)
+    offerings = await db.supplier_offerings.find(tenant_query(tenant_id), {"_id": 0}).sort("cost_per_unit", 1).to_list(5000)
+    return [await _offering_with_supplier_name(o, tenant_id) for o in offerings]
+
+
+@router.put("/supplier-offerings/{offering_id}")
+async def update_supplier_offering(offering_id: str, payload: SupplierOfferingUpdate, user: dict = Depends(require_owner)):
+    tenant_id = get_tenant_id(user)
+    offering = await db.supplier_offerings.find_one(tenant_query(tenant_id, {"id": offering_id}))
+    if not offering:
+        raise HTTPException(status_code=404, detail="Oferta de proveedor no encontrada")
+    updates = {k: v for k, v in payload.model_dump(exclude_unset=True).items() if v is not None}
+
+    price_changed = "cost_per_unit" in updates and round(float(updates["cost_per_unit"]), 4) != round(
+        float(offering.get("cost_per_unit", 0)), 4
+    )
+    if price_changed:
+        updates["last_price_update"] = now_iso()[:10]
+
+    if updates:
+        updates["updated_at"] = now_iso()
+        await db.supplier_offerings.update_one(tenant_query(tenant_id, {"id": offering_id}), {"$set": updates})
+
+    fresh = await db.supplier_offerings.find_one(tenant_query(tenant_id, {"id": offering_id}), {"_id": 0})
+    return await _offering_with_supplier_name(fresh, tenant_id)
+
+
+@router.delete("/supplier-offerings/{offering_id}")
+async def delete_supplier_offering(offering_id: str, user: dict = Depends(require_owner)):
+    tenant_id = get_tenant_id(user)
+    await db.supplier_offerings.delete_one(tenant_query(tenant_id, {"id": offering_id}))
+    return {"ok": True}
+
+
+@router.get("/materials/{material_id}/offerings")
+async def material_offerings(material_id: str, user: dict = Depends(require_owner)):
+    """Active supplier offerings for a material, cheapest first — the data
+    the next feature will use to suggest which supplier to buy from when
+    generating a purchase order."""
+    tenant_id = get_tenant_id(user)
+    material = await db.materials.find_one(tenant_query(tenant_id, {"id": material_id}))
+    if not material:
+        raise HTTPException(status_code=404, detail="Materia prima no encontrada")
+    offerings = await db.supplier_offerings.find(
+        tenant_query(tenant_id, {"material_id": material_id, "active": True}), {"_id": 0}
+    ).sort("cost_per_unit", 1).to_list(500)
+    return [await _offering_with_supplier_name(o, tenant_id) for o in offerings]
 
 
 # ---------------------------------------------------------------------------

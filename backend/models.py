@@ -162,6 +162,27 @@ WASTE_REASONS = [
 
 
 # ---------------------------------------------------------------------------
+# Supplier offerings (proveedor × insumo): reemplaza el rol que tenía el campo
+# suelto Material.supplier — un mismo insumo puede tener varios proveedores,
+# cada uno con su propio costo, MOQ y lead time.
+# ---------------------------------------------------------------------------
+class SupplierOfferingCreate(BaseModel):
+    supplier_id: str
+    material_id: str
+    cost_per_unit: float
+    min_order: float = 0.0  # MOQ de este proveedor para este insumo
+    lead_time_days: int = 3
+    active: bool = True
+
+
+class SupplierOfferingUpdate(BaseModel):
+    cost_per_unit: Optional[float] = None
+    min_order: Optional[float] = None
+    lead_time_days: Optional[int] = None
+    active: Optional[bool] = None
+
+
+# ---------------------------------------------------------------------------
 # Orders (comandas / tickets)
 # ---------------------------------------------------------------------------
 class SalesChannel(BaseModel):
