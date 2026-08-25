@@ -118,7 +118,6 @@ class MaterialCreate(BaseModel):
     min_order: float = 0.0  # minimum order quantity (MOQ) per purchase
     lead_time_days: int = 3  # days a new purchase order takes to arrive from this supplier
     last_price_update: Optional[str] = None  # ISO date of the last cost_per_unit change
-    supplier: Optional[str] = ""
     active: bool = True
 
 
@@ -134,7 +133,6 @@ class MaterialUpdate(BaseModel):
     min_order: Optional[float] = None
     lead_time_days: Optional[int] = None
     last_price_update: Optional[str] = None  # ISO date; normally set automatically, not by the client
-    supplier: Optional[str] = None
     active: Optional[bool] = None
 
 

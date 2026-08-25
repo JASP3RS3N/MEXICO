@@ -93,7 +93,6 @@ async def create_material(payload: MaterialCreate, user: dict = Depends(require_
         # A material's cost is set for the first time at creation, so it's
         # not "stale" yet — stamp today rather than leaving it null.
         "last_price_update": now_iso()[:10],
-        "supplier": payload.supplier or "",
         "active": payload.active,
         "created_at": now_iso(),
         "updated_at": now_iso(),

@@ -7,11 +7,10 @@ import { Btn, Card, Input, Select, Field, Modal, EmptyState, PageLoader, Toggle,
 import { money, num } from "@/lib/format";
 
 const UNITS = ["kg", "g", "lt", "ml", "pza", "caja", "paquete", "bolsa"];
-const emptyMat = { sku: "", name: "", unit: "kg", category: "General", cost_per_unit: "", current_stock: "", min_stock: "", par_stock: "", min_order: "", supplier: "", active: true };
+const emptyMat = { sku: "", name: "", unit: "kg", category: "General", cost_per_unit: "", current_stock: "", min_stock: "", par_stock: "", min_order: "", active: true };
 
 export default function Inventory() {
   const [materials, setMaterials] = useState([]);
-  const [suppliers, setSuppliers] = useState([]);
   const [currency, setCurrency] = useState("MXN");
   const [loading, setLoading] = useState(true);
   const [onlyLow, setOnlyLow] = useState(false);
@@ -21,9 +20,8 @@ export default function Inventory() {
 
   const load = async () => {
     try {
-      const [m, s, sup] = await Promise.all([api.get("/materials"), api.get("/settings"), api.get("/suppliers")]);
+      const [m, s] = await Promise.all([api.get("/materials"), api.get("/settings")]);
       setMaterials(m.data);
-      setSuppliers((sup.data || []).filter((x) => x.active !== false));
       if (s.data?.currency) setCurrency(s.data.currency);
     } catch {
       toast.error("No se pudo cargar el inventario");
@@ -49,7 +47,6 @@ export default function Inventory() {
       name: modal.name,
       unit: modal.unit,
       category: modal.category,
-      supplier: modal.supplier,
       active: modal.active,
       cost_per_unit: Number(modal.cost_per_unit || 0),
       current_stock: Number(modal.current_stock || 0),
@@ -124,7 +121,6 @@ export default function Inventory() {
                   <th className="px-4 py-3 font-medium text-right">Mín / Par</th>
                   <th className="px-4 py-3 font-medium text-right">Costo</th>
                   <th className="px-4 py-3 font-medium text-right">Valor</th>
-                  <th className="px-4 py-3 font-medium">Proveedor</th>
                   <th className="px-4 py-3" />
                 </tr>
               </thead>
@@ -145,7 +141,6 @@ export default function Inventory() {
                     <td className="px-4 py-3 text-right font-mono text-textDim">{num(m.min_stock, 0)} / {num(m.par_stock, 0)}</td>
                     <td className="px-4 py-3 text-right font-mono text-money">{money(m.cost_per_unit, currency)}</td>
                     <td className="px-4 py-3 text-right font-mono text-money">{money(Number(m.current_stock) * Number(m.cost_per_unit), currency)}</td>
-                    <td className="px-4 py-3 text-textMain truncate max-w-[140px]">{m.supplier || "—"}</td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1 justify-end">
                         <button onClick={() => setAdjust({ material: m, qty: "", reason: "" })} title="Ajustar stock" className="text-textDim hover:text-cyan p-1.5"><PackageMinus className="h-4 w-4" /></button>
@@ -184,14 +179,6 @@ export default function Inventory() {
             <Field label="Stock mínimo (alerta)"><Input type="number" step="0.001" value={modal.min_stock} onChange={(e) => setModal({ ...modal, min_stock: e.target.value })} /></Field>
             <Field label="Stock par (objetivo)"><Input type="number" step="0.001" value={modal.par_stock} onChange={(e) => setModal({ ...modal, par_stock: e.target.value })} /></Field>
             <Field label="Mínimo de compra (MOQ)" hint="Cantidad mínima al generar una orden de compra"><Input type="number" step="0.001" value={modal.min_order} onChange={(e) => setModal({ ...modal, min_order: e.target.value })} /></Field>
-            <Field label="Proveedor">
-              <Select value={modal.supplier} onChange={(e) => setModal({ ...modal, supplier: e.target.value })}>
-                <option value="">Sin proveedor / sin asignar</option>
-                {suppliers.map((s) => (
-                  <option key={s.id} value={s.name}>{s.name}</option>
-                ))}
-              </Select>
-            </Field>
             <div className="sm:col-span-2"><Toggle checked={modal.active} onChange={(v) => setModal({ ...modal, active: v })} label="Activo" /></div>
           </div>
         )}
