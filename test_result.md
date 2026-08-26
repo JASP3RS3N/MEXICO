@@ -101,3 +101,127 @@
 #====================================================================================================
 # Testing Data - Main Agent and testing sub agent both should log testing data below this section
 #====================================================================================================
+
+user_problem_statement: |
+  App para control financiero, de inventario y P&L de un restaurante smokehouse, con roles:
+  - Dueño: acceso a todo; único que ve finanzas y venta del día.
+  - Cajera: levanta órdenes y cobra; el ticket se envía a preparación.
+  - Preparación: acepta la orden; pantalla de cliente muestra el estatus de las comandas.
+  Registrar materia prima con data maestra, generar orden de compra, dashboard P&L,
+  editar precios y crear usuarios.
+
+backend:
+  - task: "Auth JWT + RBAC (owner/cashier/prep) and user management"
+    implemented: true
+    working: true
+    file: "backend/routes_auth.py, backend/security.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: "JWT + bcrypt, role guards. smoke_test.py verifies cashier/prep blocked from finances & users (403), owner allowed. Last-owner guardrails."
+  - task: "Menu/products + price edit (owner only)"
+    implemented: true
+    working: true
+    file: "backend/routes_menu.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: "Categories/products CRUD; PATCH price owner-only; recipe cost auto-computed. Verified via smoke_test."
+  - task: "Materia prima master data + purchase orders + stock movements"
+    implemented: true
+    working: true
+    file: "backend/routes_inventory.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: "Materials CRUD, adjust, low-stock, reorder suggestions. PO create + receive updates stock/cost. Verified."
+  - task: "Orders lifecycle: POS -> kitchen -> pay + inventory deduction"
+    implemented: true
+    working: true
+    file: "backend/routes_orders.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: "Create (cashier), kitchen queue hides prices, public /display no money, accept/ready/deliver/pay. Pay deducts recipe materials + records COGS + change. Verified."
+  - task: "Finance P&L, daily sales, dashboard, expenses (owner only)"
+    implemented: true
+    working: true
+    file: "backend/routes_finance.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: "P&L (revenue, COGS, gross/net profit, margins, series, by category, top products), daily (by method/hour), dashboard KPIs, expenses CRUD. Verified gross_profit=revenue-cogs and net=gross-opex."
+
+frontend:
+  - task: "Auth context, role-based routing, app shell"
+    implemented: true
+    working: "NA"
+    file: "frontend/src/App.js, context/AuthContext.js, components/Layout.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "Role-filtered sidebar, protected routes redirect by role. Not yet UI-tested (no live Mongo in build env)."
+  - task: "POS, Orders, Kitchen, public Client Display"
+    implemented: true
+    working: "NA"
+    file: "frontend/src/pages/POS.js, Orders.js, Kitchen.js, Display.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "POS cart+charge, kitchen KDS with timers, public status board polling. Needs UI test."
+  - task: "Owner admin: P&L dashboard, menu/prices, inventory, purchase orders, users, expenses, settings"
+    implemented: true
+    working: "NA"
+    file: "frontend/src/pages/Dashboard.js, Menu.js, Inventory.js, PurchaseOrders.js, Users.js, Expenses.js, Settings.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "Recharts P&L dashboard, inline price edit, materia prima master data, reorder-suggested POs, user CRUD. Needs UI test."
+
+metadata:
+  created_by: "main_agent"
+  version: "1.0"
+  test_sequence: 1
+  run_ui: false
+
+test_plan:
+  current_focus:
+    - "Auth context, role-based routing, app shell"
+    - "POS, Orders, Kitchen, public Client Display"
+    - "Owner admin: P&L dashboard, menu/prices, inventory, purchase orders, users, expenses, settings"
+  stuck_tasks: []
+  test_all: false
+  test_priority: "high_first"
+
+agent_communication:
+    -agent: "main"
+    -message: |
+      Built full smokehouse management app on FastAPI+Mongo+React. Backend verified end-to-end
+      with backend/smoke_test.py (42/42 passing) using mongomock-motor: auth/RBAC, POS order flow,
+      kitchen transitions, payment with inventory deduction + COGS, purchase orders receiving,
+      and P&L math. Frontend compiles; needs live UI testing against a running Mongo.
+      Seed users: dueno/dueno123 (owner), caja/caja123 (cashier), cocina/cocina123 (prep).

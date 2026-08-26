@@ -1,172 +1,83 @@
-# Development Plan — Factor·IA Dark Animated Landing Page (React + Tailwind + Framer Motion)
+# Smokehouse OS — Control financiero, inventario y P&L
 
-## 1) Objectives
-- Deliver a dark, modern, animated **Spanish-first** landing page for **Factor·IA** centered on the core promise: **cumplimiento IATF 16949 + compliance + trazabilidad automática** para proveedores **Tier 2/Tier 3**.
-- Ensure the message is unmistakable across hero + section headers: **“Tu cliente OEM te va a auditar. Con Factor·IA, ya cumples.”**
-- Implement fluid, performant motion using **Framer Motion**:
-  - Scroll reveal (fade-in + slide-up) in every section
-  - Hero counters (CountUp)
-  - Hover elevation + border/glow on cards
-  - Subtle animated gradient/particles/noise in hero
-  - Optional typing/reveal on a key phrase (motion-safe)
-- Maintain strict content rules:
-  - **Misión / Visión / Valores must be reproduced verbatim** (no edits).
-  - Main content in Spanish; **International** section includes English copy.
-  - **Contacto** uses **factor.iaops@gmail.com** across the site.
-- Incorporate requirements confirmed from the reference artifact:
-  - Add **Precios** section with **published prices** and included items.
-  - Keep the **IAtipsMX canal 1** link visible and reachable from nav: `iatipsmx-canal1.html`.
-- Keep a professional “piso de planta” tone: direct, industrial, compliance-first (not “IA genérica”).
-- Mobile-first: everything must work perfectly on mobile, including sticky nav and animations.
+Aplicación full-stack para administrar un restaurante **smokehouse**: punto de venta,
+comandas hacia cocina, pantalla de estatus para el cliente, control de **materia prima**,
+**órdenes de compra**, **gastos** y un **dashboard P&L** visible únicamente para el dueño.
 
-## 2) Implementation Steps
+## Stack
+- **Backend:** FastAPI + MongoDB (Motor), JWT (PyJWT) + bcrypt, Pydantic v2.
+- **Frontend:** React 19 + React Router 7 + Tailwind, Recharts, lucide-react, sonner.
+- Todas las rutas de API viven bajo `/api`. El frontend usa `REACT_APP_BACKEND_URL`.
 
-### Phase 1 — Core Animation + Layout POC (Completed)
-Goal: prove the animation system + structure before final polish.
+## Roles y permisos
+| Rol | Acceso |
+|-----|--------|
+| **Dueño** (`owner`) | Todo. **Único** que ve finanzas, venta del día y P&L. Crea usuarios, edita precios, materia prima, órdenes de compra, gastos y ajustes. |
+| **Cajera** (`cashier`) | Levanta órdenes (POS), envía a cocina y **cobra**. Ve el menú y sus órdenes. No ve finanzas. |
+| **Preparación** (`prep`) | Ve la cola de cocina, **acepta** y avanza comandas (preparando → lista → entregada). No ve finanzas ni precios. |
+| **Cliente** (público) | Pantalla `/pantalla`: tablero con número de comanda y estatus. Sin login, sin precios. |
 
-**User stories (validated)**
-1. As a visitor, I see a high-impact hero in <5 seconds.
-2. As a visitor, scrolling reveals sections smoothly.
-3. As a visitor, sticky nav jumps to sections.
-4. As a mobile visitor, the page remains readable and fast.
-5. As a visitor with reduced motion, animations degrade gracefully.
+## Flujo operativo
+1. La **cajera** levanta la orden en el **POS** → la comanda se envía automáticamente a **cocina** (estado `pending`).
+2. **Preparación** la **acepta** (`preparing`), la marca **lista** (`ready`) y **entregada** (`delivered`).
+3. El **cliente** sigue su número en la **pantalla pública**.
+4. La cajera **cobra** (efectivo/tarjeta/transferencia). Al pagar se **descuenta la materia prima** según la receta del producto y se registra el **costo de venta (COGS)**.
+5. El **dueño** ve todo en el **dashboard P&L**.
 
-**Completed work (current state of repo)**
-- Set up React + Tailwind + Framer Motion.
-- Implemented reusable `ScrollReveal` wrapper.
-- Built sticky `TopNav` (desktop + mobile).
-- Built Hero with animated badge + scroll-reveal headline and **animated count-up counters** (via `CountUp`).
-- Implemented required core sections and order (except pricing):
-  - Problema, Garantías, Por qué, Misión/Visión/Valores (verbatim), Servicios (accordion), Contacto, Internacional, Footer.
-- Confirmed basic functionality through frontend testing:
-  - Responsive layout, anchors, mobile menu, scroll reveals.
+## Modelo de datos (MongoDB)
+- `users` — id, username, name, role, password_hash (bcrypt), active.
+- `settings` — restaurant_name, currency, tax_rate, tax_included.
+- `categories` / `products` — menú; `products.recipe` liga a `materials` para costeo e inventario.
+- `materials` — materia prima con **data maestra**: sku, unit, category, cost_per_unit, current_stock, min_stock, par_stock, supplier.
+- `orders` — comandas: items (snapshot de precio/costo/receta), status, totales, pago, tiempos.
+- `purchase_orders` — órdenes de compra; al **recibir** suben stock y actualizan costo.
+- `inventory_movements` — bitácora (purchase / consumption / adjustment).
+- `expenses` — gastos operativos (alimentan el P&L).
+- `counters` — folios secuenciales de órdenes y OC.
 
-### Phase 2 — V1 Completion (In Progress → Updated with final spec + pricing + nav)
-Goal: ship the **complete** landing page matching the user’s spec, including **Precios** and **IAtipsMX canal 1 link**, plus UI polish.
+## Lógica de P&L
+```
+Ingresos (neto, sin IVA)         = Σ subtotal de órdenes pagadas
+(–) Costo de ventas (COGS)       = Σ costo de receta de lo vendido
+= Utilidad bruta                 (+ margen %)
+(–) Gastos operativos            = Σ gastos del periodo
+= Utilidad neta                  (+ margen neto %)
+```
+Además: serie de ventas por día, ventas por categoría, top de productos, venta por hora,
+métodos de pago y venta del día.
 
-**User stories**
-1. As a Tier 2/Tier 3 leader, I immediately understand this is about **OEM audit readiness**: IATF 16949 + compliance + traceability.
-2. As a visitor, I can scan guarantees/differentiators/services quickly (cards + accordion).
-3. As a visitor, I can access contact/diagnóstico CTA from anywhere.
-4. As a stakeholder, I see **published fixed monthly pricing** clearly.
-5. As a visitor, I can access **IAtipsMX — Negocios Locales (canal 1)** from the sticky nav.
+## Endpoints principales (`/api`)
+- **Auth/Usuarios:** `POST /auth/login`, `GET /auth/me`, `GET/POST/PUT/DELETE /users` (dueño).
+- **Menú:** `GET/POST/PUT/DELETE /categories`, `GET/POST/PUT/DELETE /products`, `PATCH /products/{id}/price`.
+- **Inventario:** `GET/POST/PUT/DELETE /materials`, `POST /materials/{id}/adjust`, `GET /materials/low-stock`, `GET /inventory/movements`.
+- **Órdenes:** `POST /orders`, `GET /orders`, `GET /kitchen`, `GET /display` (público), `POST /orders/{id}/{accept|ready|deliver|cancel|pay}`.
+- **Compras:** `GET/POST /purchase-orders`, `GET /purchase-orders/suggestions`, `PUT /purchase-orders/{id}/status`.
+- **Finanzas (solo dueño):** `GET /finance/dashboard`, `GET /finance/pnl`, `GET /finance/daily`, `GET/POST/DELETE /expenses`.
+- **Ajustes:** `GET /settings`, `PUT /settings` (dueño).
 
-**Steps (revised to incorporate confirmed new info)**
+## Pantallas (frontend)
+- `/login`, `/pantalla` (pública) · `/dashboard` (dueño) · `/pos` · `/ordenes` · `/cocina`
+- `/menu` · `/inventario` · `/compras` · `/gastos` · `/usuarios` · `/ajustes` (dueño).
 
-1) **Navigation updates (TopNav)**
-- Add anchor link to **#precios**.
-- Add external link in nav:
-  - Label: **“🏪 IAtipsMX — Negocios Locales”**
-  - `href="iatipsmx-canal1.html"`
-  - Ensure it is visible on desktop and accessible from the mobile menu.
+## Semilla inicial (primer arranque)
+El superadmin de plataforma (`admin`) se crea siempre, sin tenant.
+El resto es un **tenant demo** (`slug="demo"`) que solo se siembra con `SEED_DEMO_TENANT=true`
+(desactivado por defecto): usuarios `dueno/dueno123`, `caja/caja123`, `cocina/cocina123`,
+settings, y el catálogo de smokehouse (brisket, costillas, pollo ahumado, combos,
+guarniciones, bebidas) con recetas y materia prima — todo asociado a ese `tenant_id`.
 
-2) **Add missing section: PRECIOS**
-- Create `src/components/Precios.js`.
-- Insert into the page flow (recommended: after `Servicios`, before `Contacto`) and add `id="precios"`.
-- Use the **exact tiers + copy constraints** below (no rounding / no rewording of plan contents):
-  - **Inicio — $85K MXN/mes** (5 servicios core)
-    - Asistente Piso de Planta
-    - Reportes Automáticos Calidad
-    - Traductor Técnico EN↔ES
-    - LPA Digitalizado con IA
-    - Asistente Legal LFT
-  - **Profesional — $185K MXN/mes** (11 servicios + 1 dashboard)
-    - Todo de Inicio +
-    - Motor de Análisis de RFQs
-    - Monitor de Riesgo SC
-    - Auditor de Inventario Inteligente
-    - App Captura Calidad + Pareto
-    - MRO + Entrenador Virtual
-    - Dashboard Gerencia + Corte Financiero
-  - **Enterprise — $320K MXN/mes** (16 servicios + 2 dashboards)
-    - Todo de Profesional +
-    - App 8D / 7-Step Kaizen
-    - Generadores IA (Flujos, Puestos, SOPs)
-    - Dashboard Director Multi-Planta
-    - Control de Cambios (ECM)
-    - Optimizador de Rutas RH
-    - Soporte prioritario
-  - **Total Plataforma — $450K+ MXN/mes** (20 servicios completos)
-    - Todo incluido… (mantener el concepto “Todo incluido” + bullets claros)
-- Apply the same interaction pattern as the rest of the site:
-  - Scroll reveal on section header + each card
-  - Hover elevation + glow + border intensification
-  - Featured styling for “Profesional” (como “best value”)
+## Pruebas
+`backend/smoke_test.py` ejerce el API end-to-end (auth, RBAC, POS, cocina, cobro con
+descuento de inventario, órdenes de compra y P&L) usando un Mongo en memoria
+(`mongomock-motor`). 42/42 verificaciones en verde.
 
-3) **Hero modern UI polish (no content drift)**
-- Keep hero headline/subtitle/badge/CTAs exactly aligned with the provided identity.
-- Improve background feel:
-  - Add subtle animated gradient movement (CSS background-position animation) and/or noise overlay.
-  - Ensure no performance regressions and keep readability high.
-- Add a short “typing/reveal” effect on a key phrase (e.g., “ya cumples”), with `prefers-reduced-motion` fallback.
+## Extras sugeridos ya incluidos
+- **Recetas por producto** → costeo automático y descuento de inventario al vender.
+- **Stock mínimo / par** y **sugerencia de reorden** para generar OC con un clic.
+- **Bitácora de movimientos** de inventario y **valor de inventario**.
+- **Ticket promedio, venta por hora y métodos de pago** en el dashboard.
+- **Pantalla pública** para el cliente en TV.
 
-4) **Servicios section robustness fix**
-- Fix the reported minor issue: first accordion item occasionally not expanding on first click.
-- Ensure deterministic open/close state (avoid `null` pitfalls, ensure correct keys, handle initial open state).
-- Optional UX improvement: add “Expandir todo / Colapsar todo” for mobile if it doesn’t clutter.
-
-5) **UI consistency pass (modernize glassmorphism)**
-- Allowed minor palette modernization while preserving brand anchors:
-  - Base background: `#080c14`
-  - Primary accent: `#00e5a0`
-  - Secondary: `#0ea5e9`
-  - Text: `#e8edf2`, `#b8c5d3`
-- Polish tokens/styles:
-  - Harmonize border opacity, hover glow, shadow softness
-  - Normalize card radii and padding across sections
-  - Maintain “industrial dashboard” vibe (glass panels, subtle gradients, technical mono labels)
-
-6) **QA + strict compliance checks**
-- Verify **Misión/Visión/Valores** are verbatim (exact quotes).
-- Verify every email is `factor.iaops@gmail.com`.
-- Verify International section includes the English line exactly:
-  - “You're global. Your plant in Mexico needs local AI.”
-- Verify anchors and nav:
-  - `#problema #garantias #porque #servicios #precios #contacto`
-- Run a final responsive + animation pass:
-  - Desktop/tablet/mobile
-  - Reduced-motion
-  - Ensure counters animate once, scroll reveals trigger once, no layout shift.
-
-### Phase 3 — Enhancements / Production Hardening (Planned)
-Goal: polish, maintainability, SEO, performance, and long-term editing.
-
-**User stories**
-1. As a visitor, the page loads fast on mobile.
-2. As a visitor, social previews look correct.
-3. As a stakeholder, editing pricing/services is easy and safe.
-4. As an auditor-minded buyer, the site feels consistent and trustworthy.
-5. As a visitor, the UI remains smooth (no jank) with animations.
-
-**Steps**
-- Refactor structured content into a config file (`content.js/ts`) for:
-  - Problema cards, Garantías, Diferenciadores, Valores, Servicios categories, **Pricing plans**.
-- SEO: OpenGraph/Twitter meta, favicon, title/description emphasizing IATF/compliance/traceability.
-- Performance: ensure hero ambient effects are lightweight; audit blur usage; check bundle size.
-- Accessibility: focus states, aria labels for mobile menu, semantic headings/lists.
-- Final regression testing including:
-  - Pricing correctness
-  - IAtipsMX link correctness
-  - Accordion reliability
-
-### Phase 4 — Optional Add-ons (Only if requested)
-- Contact form with validation + backend email relay.
-- Analytics (Plausible/GA) with privacy-friendly defaults.
-- Multilingual toggle (ES/EN) beyond the International section.
-
-## 3) Next Actions
-1. Implement `Precios.js` with the **exact** tiers and amounts:
-   - Inicio $85K, Profesional $185K, Enterprise $320K, Total $450K+ (MXN/mes)
-2. Add `#precios` to nav and add **IAtipsMX — Negocios Locales** link to `iatipsmx-canal1.html` in `TopNav` (desktop + mobile).
-3. Fix Servicios accordion first-click inconsistency.
-4. Apply final modern UI polish (glow, glass, hero ambient motion) without changing required text.
-5. Run final QA sweep (responsive + reduced-motion + anchors + console).
-
-## 4) Success Criteria
-- The landing page follows the required section order and keeps the central IATF/compliance/traceability positioning.
-- **Misión/Visión/Valores are reproduced exactly** (verbatim).
-- Animations meet requirements: scroll reveal + hero counters + hover glow + subtle hero ambient motion; respects `prefers-reduced-motion`.
-- **Pricing is present and matches the published tiers exactly**:
-  - Inicio $85K, Profesional $185K, Enterprise $320K, Total $450K+ MXN/mes.
-- Nav includes the **IAtipsMX canal 1** link and all anchors work on mobile.
-- No console errors; mobile performance is strong; accessibility is solid.
+## Ideas futuras (no implementadas)
+Impresión de tickets, corte de caja por turno/cajera, propinas, descuentos/cupones,
+multi-sucursal, reportes exportables (PDF/Excel), notificaciones y modo offline.

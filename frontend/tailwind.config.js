@@ -6,12 +6,19 @@ module.exports = {
   theme: {
     extend: {
       colors: {
-        background: "#080c14",
-        surface: "#0d1420",
-        surface2: "#121c2c",
-        surface3: "#1a2840",
-        border: "#1e3050",
-        borderHover: "#2e4a72",
+        // Neutrals are CSS variables so they can be themed at runtime (Settings).
+        background: "rgb(var(--c-bg) / <alpha-value>)",
+        surface: "rgb(var(--c-surface) / <alpha-value>)",
+        surface2: "rgb(var(--c-surface2) / <alpha-value>)",
+        surface3: "rgb(var(--c-surface3) / <alpha-value>)",
+        sidebar: "rgb(var(--c-sidebar) / <alpha-value>)",
+        border: "rgb(var(--c-border) / <alpha-value>)",
+        borderHover: "rgb(var(--c-borderhover) / <alpha-value>)",
+        textMain: "rgb(var(--c-textmain) / <alpha-value>)",
+        textDim: "rgb(var(--c-textdim) / <alpha-value>)",
+        textBright: "rgb(var(--c-textbright) / <alpha-value>)",
+        money: "rgb(var(--c-money) / <alpha-value>)",
+        // Accents stay fixed.
         cyan: {
           DEFAULT: "#00e5a0",
           dim: "rgba(0,229,160,0.1)",
@@ -21,9 +28,6 @@ module.exports = {
           DEFAULT: "#0ea5e9",
           dim: "rgba(14,165,233,0.1)"
         },
-        textMain: "#b8c5d3",
-        textDim: "#5a6d82",
-        textBright: "#e8edf2"
       },
       fontFamily: {
         display: ['Literata', 'Georgia', 'serif'],

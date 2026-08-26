@@ -1,0 +1,65 @@
+services:
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    environment:
+      MONGO_URL: mongodb://mongo:27017
+      DB_NAME: smokehouse
+      JWT_SECRET: cambia-esto-en-produccion
+      CORS_ORIGINS: http://localhost:3000
+      # Siembra un tenant demo completo (usuarios + settings + catálogo). Desactivado por defecto.
+      SEED_DEMO_TENANT: "true"
+      # --- Asistente IA (LM Studio) ---
+      AI_ENABLED: "true"
+      # LM Studio en la MISMA PC: deja host.docker.internal.
+      # LM Studio en otra máquina por Tailscale: usa http://TU-IP-TAILSCALE:1234/v1
+      LMSTUDIO_BASE_URL: "http://host.docker.internal:1234/v1"
+      # Opcional: fija un modelo; si se deja vacío usa el que esté cargado.
+      LMSTUDIO_MODEL: ""
+      # --- Email (SMTP) para enviar el PIN a empleados (opcional) ---
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASSWORD: ${SMTP_PASSWORD}
+      SMTP_FROM_NAME: ${SMTP_FROM_NAME}
+      # --- Terminal bancaria / alertas ---
+      # Secreto que valida el webhook de la terminal (Clip/Mercado Pago/n8n).
+      PAYMENTS_WEBHOOK_SECRET: "cambia-este-secreto"
+      # Opcional: URL a la que se envían las alertas de bajo stock (n8n/WhatsApp). Vacío = solo en la app.
+      ALERT_WEBHOOK_URL: ""
+      # --- Fiscal (CFDI 4.0) / Asistente IA: búsqueda web ---
+      FISCAL_ENCRYPTION_KEY: ${FISCAL_ENCRYPTION_KEY}
+      FIRECRAWL_MCP_URL: ${FIRECRAWL_MCP_URL}
+    extra_hosts:
+      # Permite que el contenedor llegue a LM Studio corriendo en el host.
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "8001:8001"
+    depends_on:
+      mongo:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        REACT_APP_BACKEND_URL: http://localhost:8001
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+
+volumes:
+  mongo_data:

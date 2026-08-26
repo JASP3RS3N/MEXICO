@@ -3,13 +3,27 @@
 @tailwind utilities;
 
 @layer base {
+  /* Default (dark) palette as RGB channels; overridable at runtime from Settings. */
+  :root {
+    --c-bg: 8 12 20;
+    --c-surface: 13 20 32;
+    --c-surface2: 18 28 44;
+    --c-surface3: 26 40 64;
+    --c-sidebar: 13 20 32;
+    --c-border: 30 48 80;
+    --c-borderhover: 46 74 114;
+    --c-textmain: 184 197 211;
+    --c-textbright: 232 237 242;
+    --c-textdim: 90 109 130;
+    --c-money: 0 229 160;
+  }
   html {
     scroll-behavior: smooth;
-    background-color: #080c14;
+    background-color: rgb(var(--c-bg));
   }
   body {
-    background-color: #080c14;
-    color: #b8c5d3;
+    background-color: rgb(var(--c-bg));
+    color: rgb(var(--c-textmain));
     font-family: 'Instrument Sans', sans-serif;
     line-height: 1.65;
     overflow-x: hidden;
