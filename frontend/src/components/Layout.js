@@ -21,6 +21,10 @@ import {
   Handshake,
   Contact,
   Bell,
+  PackagePlus,
+  Warehouse,
+  Gauge,
+  SlidersHorizontal,
 } from "lucide-react";
 import { useAuth, ROLE_LABELS } from "@/context/AuthContext";
 import api from "@/lib/api";
@@ -42,7 +46,16 @@ const NAV = [
   { to: "/empleados", label: "Empleados", icon: Contact, roles: ["owner"] },
   { to: "/usuarios", label: "Usuarios", icon: Users, roles: ["owner"] },
   { to: "/ajustes", label: "Ajustes", icon: Settings, roles: ["owner"] },
+  // WMS Producción ↔ Almacén
+  { to: "/wms/solicitudes", label: "Solicitar Material", icon: PackagePlus, roles: ["owner", "production"], section: "WMS" },
+  { to: "/wms/almacen", label: "Almacén", icon: Warehouse, roles: ["owner", "warehouse"], section: "WMS", badge: "wms" },
+  { to: "/wms/desempeno", label: "Desempeño WMS", icon: Gauge, roles: ["owner"], section: "WMS" },
+  { to: "/wms/ajustes", label: "Ajustes WMS", icon: SlidersHorizontal, roles: ["owner"], section: "WMS" },
 ];
+
+// Roles que entran con usuario y contraseña: al salir van al login, no a la
+// pantalla de PIN (que exige un dispositivo activado por el dueño).
+const PASSWORD_LOGIN_ROLES = ["owner", "production", "warehouse"];
 
 export default function Layout({ children }) {
   const { user, logout, endShift, pauseSession } = useAuth();
@@ -51,6 +64,7 @@ export default function Layout({ children }) {
   const [open, setOpen] = useState(false);
   const [brand, setBrand] = useState("Smokehouse");
   const [alertCount, setAlertCount] = useState(0);
+  const [wmsRedCount, setWmsRedCount] = useState(0);
   const [menuOpen, setMenuOpen] = useState(false);
   const [confirmLogoutOpen, setConfirmLogoutOpen] = useState(false);
 
@@ -69,6 +83,20 @@ export default function Layout({ children }) {
     return () => clearInterval(t);
   }, [user, location.pathname]);
 
+  // Contador de solicitudes atrasadas en el badge de Almacén, para que se note
+  // desde cualquier pantalla del sistema.
+  useEffect(() => {
+    if (!["owner", "warehouse"].includes(user?.role)) return;
+    const load = () =>
+      api
+        .get("/wms/board")
+        .then(({ data }) => setWmsRedCount(data?.counts?.red || 0))
+        .catch(() => {});
+    load();
+    const t = setInterval(load, 30000);
+    return () => clearInterval(t);
+  }, [user, location.pathname]);
+
   useEffect(() => setOpen(false), [location.pathname]);
 
   const items = NAV.filter((n) => n.roles.includes(user?.role));
@@ -77,7 +105,14 @@ export default function Layout({ children }) {
   // PIN login). The owner has two separate actions instead (see the
   // dropdown below): pausing (same effect, different entry point) and a
   // full, confirmed logout that deactivates the device.
+  // Producción/almacén entran con contraseña en su propio navegador (o en una
+  // pestaña de Teams), así que salen al login, no a la pantalla de PIN.
   const handleEndShift = () => {
+    if (PASSWORD_LOGIN_ROLES.includes(user?.role)) {
+      logout();
+      navigate("/login");
+      return;
+    }
     endShift();
     navigate("/pin");
   };
@@ -107,30 +142,41 @@ export default function Layout({ children }) {
       </div>
 
       <nav className="flex-1 overflow-y-auto p-3 space-y-1">
-        {items.map((item) => (
-          <NavLink
-            key={item.to}
-            to={item.to}
-            className={({ isActive }) =>
-              cn(
-                "flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all min-w-0",
-                isActive
-                  ? "bg-amber-500/15 text-amber-300 border border-amber-500/25"
-                  : "text-textMain hover:text-textBright hover:bg-surface2 border border-transparent"
-              )
-            }
-          >
-            <item.icon className="h-[18px] w-[18px] shrink-0" />
-            <span className="truncate flex-1">{item.label}</span>
-            {item.badge === "alerts" && alertCount > 0 && (
-              <span className="shrink-0 min-w-[20px] h-5 px-1.5 rounded-full bg-red-500 text-white text-[11px] font-bold flex items-center justify-center">
-                {alertCount}
-              </span>
+        {items.map((item, index) => (
+          <React.Fragment key={item.to}>
+            {item.section && items[index - 1]?.section !== item.section && (
+              <p className="px-3 pt-4 pb-1 text-[10px] uppercase tracking-widest text-textDim font-semibold">
+                {item.section}
+              </p>
             )}
-          </NavLink>
+            <NavLink
+              to={item.to}
+              className={({ isActive }) =>
+                cn(
+                  "flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all min-w-0",
+                  isActive
+                    ? "bg-amber-500/15 text-amber-300 border border-amber-500/25"
+                    : "text-textMain hover:text-textBright hover:bg-surface2 border border-transparent"
+                )
+              }
+            >
+              <item.icon className="h-[18px] w-[18px] shrink-0" />
+              <span className="truncate flex-1">{item.label}</span>
+              {item.badge === "alerts" && alertCount > 0 && (
+                <span className="shrink-0 min-w-[20px] h-5 px-1.5 rounded-full bg-red-500 text-white text-[11px] font-bold flex items-center justify-center">
+                  {alertCount}
+                </span>
+              )}
+              {item.badge === "wms" && wmsRedCount > 0 && (
+                <span className="shrink-0 min-w-[20px] h-5 px-1.5 rounded-full bg-red-600 text-white text-[11px] font-bold flex items-center justify-center animate-pulse-alert">
+                  {wmsRedCount}
+                </span>
+              )}
+            </NavLink>
+          </React.Fragment>
         ))}
 
-        {user?.tenant_slug && (
+        {user?.tenant_slug && ["owner", "cashier", "prep"].includes(user?.role) && (
           <a
             href={`/pantalla/${user.tenant_slug}`}
             target="_blank"
@@ -189,11 +235,13 @@ export default function Layout({ children }) {
           ) : (
             <button
               onClick={handleEndShift}
-              title="Terminar turno"
+              title={PASSWORD_LOGIN_ROLES.includes(user?.role) ? "Cerrar sesión" : "Terminar turno"}
               className="text-textDim hover:text-red-400 transition p-1.5 flex items-center gap-1.5 shrink-0"
             >
               <LogOut className="h-[18px] w-[18px]" />
-              <span className="hidden lg:inline text-xs font-medium">Terminar turno</span>
+              <span className="hidden lg:inline text-xs font-medium">
+                {PASSWORD_LOGIN_ROLES.includes(user?.role) ? "Cerrar sesión" : "Terminar turno"}
+              </span>
             </button>
           )}
         </div>

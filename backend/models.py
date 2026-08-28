@@ -37,8 +37,11 @@ class UserCreate(BaseModel):
     username: str
     name: str
     password: str
-    role: str  # owner | cashier | prep
+    role: str  # owner | cashier | prep | production | warehouse
     email: Optional[EmailStr] = None  # PIN is always generated server-side
+    # WMS: planta/locación a la que pertenece la persona. Filtra el inventario
+    # SAP que ve producción y la cola que ve almacén.
+    location_id: Optional[str] = None
 
 
 class UserUpdate(BaseModel):
@@ -47,6 +50,7 @@ class UserUpdate(BaseModel):
     role: Optional[str] = None
     active: Optional[bool] = None
     email: Optional[EmailStr] = None
+    location_id: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -290,6 +294,8 @@ class ExpenseCreate(BaseModel):
 
 class SettingsUpdate(BaseModel):
     restaurant_name: Optional[str] = None
+    # WMS: umbrales del semáforo y SLA (ver models_wms.WmsConfig).
+    wms_config: Optional[dict] = None
     currency: Optional[str] = None
     tax_rate: Optional[float] = None  # e.g. 0.16 for 16% IVA
     tax_included: Optional[bool] = None  # whether prices already include tax

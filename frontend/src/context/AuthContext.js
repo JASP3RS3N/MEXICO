@@ -15,6 +15,8 @@ export const ROLE_LABELS = {
   owner: "Dueño",
   cashier: "Cajera",
   prep: "Preparación",
+  production: "Producción",
+  warehouse: "Almacén",
 };
 
 // Where each role lands after login.
@@ -22,6 +24,8 @@ export const HOME_BY_ROLE = {
   owner: "/dashboard",
   cashier: "/pos",
   prep: "/cocina",
+  production: "/wms/solicitudes",
+  warehouse: "/wms/almacen",
 };
 
 export function AuthProvider({ children }) {

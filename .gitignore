@@ -88,3 +88,7 @@ credentials.json
 *.pem
 *.key
 .credentials
+
+# WMS: exports de SAP dejados en la carpeta compartida (datos de planta, no van al repo)
+sap_export/*
+!sap_export/.gitkeep

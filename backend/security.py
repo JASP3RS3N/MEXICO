@@ -12,7 +12,9 @@ from config import (
     JWT_EXPIRE_HOURS,
     JWT_SECRET,
     ROLE_OWNER,
+    ROLE_PRODUCTION,
     ROLE_SUPERADMIN,
+    ROLE_WAREHOUSE,
     clean,
     db,
     now,
@@ -137,6 +139,37 @@ require_owner = require_roles(ROLE_OWNER)
 
 # Superadmin manages the platform (all tenants).
 require_superadmin = require_roles(ROLE_SUPERADMIN)
+
+# ---------------------------------------------------------------------------
+# WMS Producción ↔ Almacén
+# ---------------------------------------------------------------------------
+# Producción levanta solicitudes; almacén las surte; el dueño hace de
+# supervisor y ve todo. El dueño se incluye en los tres guards a propósito:
+# es el rol admin ya existente y debe poder operar y auditar el módulo.
+require_production = require_roles(ROLE_PRODUCTION, ROLE_OWNER)
+require_warehouse = require_roles(ROLE_WAREHOUSE, ROLE_OWNER)
+require_wms = require_roles(ROLE_PRODUCTION, ROLE_WAREHOUSE, ROLE_OWNER)
+
+
+def user_location_id(user: dict) -> Optional[str]:
+    """Locación/planta a la que está ligado el usuario. None = sin restricción.
+
+    Producción y almacén se limitan a su locación; el dueño (supervisor) no
+    tiene locación asignada normalmente y ve todas las plantas.
+    """
+    return user.get("location_id") or None
+
+
+def require_location(user: dict) -> str:
+    """Igual que user_location_id pero exige que exista. Para acciones que
+    obligatoriamente ocurren en una planta (crear una solicitud, por ejemplo)."""
+    loc = user_location_id(user)
+    if not loc:
+        raise HTTPException(
+            status_code=400,
+            detail="Tu usuario no tiene una locación/planta asignada. Pídele al supervisor que te la asigne.",
+        )
+    return loc
 
 
 def get_tenant_id(user: dict) -> str:

@@ -5,7 +5,15 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 
-from config import clean, db, gen_id, now, now_iso, tenant_query
+from config import (
+    WMS_OPEN_STATUSES,
+    clean,
+    db,
+    gen_id,
+    now,
+    now_iso,
+    tenant_query,
+)
 
 logger = logging.getLogger("smokehouse.alerts")
 
@@ -206,3 +214,80 @@ async def check_stale_supplier_prices(tenant_id: str):
         await db.alerts.insert_one(alert)
         await _fire_webhook(alert)
         logger.info("Alerta de precio desactualizado: proveedor %s (%d insumos)", supplier_name, len(stale_materials))
+
+
+# ---------------------------------------------------------------------------
+# WMS Producción ↔ Almacén: solicitudes de material atrasadas
+# ---------------------------------------------------------------------------
+async def scan_overdue_requests(tenant_id: str) -> int:
+    """Alerta por cada solicitud abierta que rebasó el umbral rojo del semáforo.
+
+    El tablero de almacén ya pinta el retraso en tiempo real; esto es la copia
+    persistente para el supervisor (campanita + sección de Alertas) y para el
+    webhook opcional de n8n/WhatsApp, con la misma mecánica de deduplicación
+    que las alertas de bajo stock: una alerta viva por solicitud, y se
+    auto-resuelve en cuanto la solicitud se cierra.
+
+    Devuelve cuántas alertas NUEVAS creó.
+    """
+    # Import local: alerts.py lo importan varios routers y wms_service importa
+    # config; mantenerlo aquí evita un ciclo de importación al arranque.
+    from wms_service import get_wms_config, minutes_between
+
+    cfg = await get_wms_config(tenant_id)
+    threshold = cfg["yellow_max_minutes"]
+
+    open_requests = await db.wms_requests.find(
+        tenant_query(tenant_id, {"status": {"$in": WMS_OPEN_STATUSES}}), {"_id": 0}
+    ).to_list(2000)
+    open_ids = {r["id"] for r in open_requests}
+
+    # Toda solicitud ya cerrada deja de tener alerta viva.
+    await db.alerts.update_many(
+        tenant_query(
+            tenant_id,
+            {"type": "wms_request_overdue", "resolved": False, "request_id": {"$nin": list(open_ids)}},
+        ),
+        {"$set": {"resolved": True, "resolved_at": now_iso()}},
+    )
+
+    new_alerts = 0
+    for req in open_requests:
+        elapsed = minutes_between(req.get("requested_at"))
+        if elapsed <= threshold:
+            continue
+        if await db.alerts.find_one(
+            tenant_query(tenant_id, {"type": "wms_request_overdue", "request_id": req["id"], "resolved": False})
+        ):
+            continue  # ya alertada, no se repite
+
+        alert = {
+            "id": gen_id(),
+            "tenant_id": tenant_id,
+            "type": "wms_request_overdue",
+            "ref_type": "wms_request",
+            "ref_id": req["id"],
+            "request_id": req["id"],
+            "folio": req.get("folio", ""),
+            "name": f"{req.get('folio', '')} · {req.get('part_number', '')}",
+            "part_number": req.get("part_number", ""),
+            "location_id": req.get("location_id"),
+            "plant_code": req.get("plant_code", ""),
+            "requested_by_name": req.get("requested_by_name", ""),
+            "claimed_by_name": req.get("claimed_by_name"),
+            "minutes_elapsed": round(elapsed, 1),
+            "threshold_minutes": threshold,
+            "level": "critical",
+            "message": (
+                f"La solicitud {req.get('folio', '')} ({req.get('part_number', '')}) lleva "
+                f"{int(elapsed)} minutos sin surtirse — más del umbral de {threshold} min."
+            ),
+            "resolved": False,
+            "created_at": now_iso(),
+        }
+        await db.alerts.insert_one(alert)
+        await _fire_webhook(alert)
+        logger.info("Alerta de solicitud atrasada: %s (%d min)", req.get("folio", ""), int(elapsed))
+        new_alerts += 1
+
+    return new_alerts
