@@ -132,3 +132,183 @@ Cuando un insumo llega a su mínimo (al venderse por su **receta/BOM**), se gene
 - **Proveedores** y **Empleados** (altas/bajas con historial) en el menú lateral (dueño).
 - **Colores** editables en **Ajustes** (fondo, barra lateral, letras).
 - La **IA** puede dar de alta proveedores e insumos, definir recetas (BOM), fijar precios/costos y hacer **cortes de caja**.
+
+---
+
+# 🏭 WMS Producción ↔ Almacén
+
+Módulo para que **Producción pida material** y **Almacén lo surta**, con
+trazabilidad completa, medición de desempeño y alertas visuales de retraso.
+
+> **Regla dura: cero escritura hacia SAP.** La app **solo lee** un archivo plano
+> que tu script de SAP deja en una carpeta. No hay ninguna llamada RFC/BAPI de
+> escritura, ni ajuste de stock en SAP, en todo el proyecto. Este sistema es de
+> control y trazabilidad interna; **no reemplaza ni reconcilia** el inventario
+> oficial de SAP.
+
+## 1. Usuarios y roles
+
+| Rol | Qué puede hacer | Cómo entra |
+|-----|-----------------|-----------|
+| **Producción** | Crear solicitudes, ver el inventario de referencia, seguir sus solicitudes | usuario + contraseña |
+| **Almacén** | Ver la cola, tomar/liberar solicitudes, surtir total o parcial | usuario + contraseña |
+| **Dueño / Supervisor** | Todo lo anterior + dashboards, umbrales, locaciones y export a Excel | usuario + contraseña |
+
+Los das de alta como dueño en **Usuarios**, eligiendo el rol y la
+**locación/planta**. La locación es la que filtra lo que cada quien ve: un
+operador solo trabaja con su planta; el supervisor las ve todas.
+
+> Cajera y preparación siguen entrando con PIN, sin cambios.
+
+## 2. Configura la carpeta del export de SAP
+
+Tu script (SAP GUI Scripting o RFC, disparado por el **Task Scheduler de
+Windows**) corre **MB52** y guarda el resultado en una carpeta.
+
+1. Crea la carpeta, por ejemplo `C:\sap_export`.
+2. En `docker-compose.yml`, apunta el volumen del servicio **backend** a esa carpeta:
+   ```yaml
+   volumes:
+     # izquierda = tu carpeta real · derecha = ruta dentro del contenedor (no la cambies)
+     - C:/sap_export:/data/sap_export:ro
+   ```
+   El `:ro` del final es a propósito: el contenedor **no puede escribir** ahí.
+   Si el export vive en una carpeta de red, usa la ruta UNC (`//SERVIDOR/sap`)
+   o mapea la unidad en Docker Desktop → *Settings → Resources → File sharing*.
+3. Levanta la app: `docker compose up -d --build`.
+
+### Formato del archivo
+Se acepta lo que MB52 exporta normalmente:
+- **Texto** (`.txt` / `.csv`) separado por **tabulador**, `|` (lista ALV con
+  bordes), punto y coma o coma — el separador se detecta solo, igual que las
+  líneas de adorno (`---`) y el título que SAP pone antes del encabezado.
+- **`.xlsx`**.
+
+Columnas que necesita (reconoce los nombres de MB52 en inglés y español):
+
+| Campo | Alias que reconoce |
+|-------|--------------------|
+| Número de parte | `Material`, `MATNR`, `Número de parte` |
+| Descripción | `Material Description`, `MAKTX`, `Texto breve material` |
+| Centro / planta | `Plant`, `WERKS`, `Centro`, `Planta` |
+| Almacén | `Storage Location`, `LGORT`, `Almacén` |
+| Existencia | `Unrestricted`, `LABST`, `Libre utilización` |
+| Unidad | `Base Unit of Measure`, `MEINS`, `UMB` |
+
+Si tu export usa otros nombres, fíjalos en `docker-compose.yml` sin tocar código:
+```yaml
+SAP_COL_PART_NUMBER: "Nro material"
+SAP_COL_QTY: "Stock disponible"
+```
+
+Detalles que ya están resueltos:
+- MB52 devuelve **una fila por material × centro × almacén × lote**; la app
+  **suma** el stock de libre utilización por parte y locación.
+- Las cantidades se interpretan mirando **todo el archivo** para decidir si el
+  decimal es coma o punto (así `10,000` se lee como 10, no como diez mil). Si
+  tu export resultara ambiguo, fíjalo con `SAP_DECIMAL_SEPARATOR: ","` o `"."`.
+- `SAP_LOCATION_MODE` decide si una locación es solo el centro (`plant`) o
+  centro + almacén (`plant_sloc`, el valor por defecto).
+
+## 3. El scheduler (la sincronización automática)
+
+Ya viene incluido: **APScheduler corre dentro del backend**, no necesitas cron
+ni un contenedor extra.
+
+- Relee la carpeta cada **60 minutos** (`SAP_INVENTORY_SYNC_MINUTES`).
+- Si el archivo no cambió desde la última corrida, no lo reprocesa (queda como
+  *Sin cambios* en la bitácora).
+- También barre cada 5 minutos las solicitudes atrasadas para generar alertas.
+- Para apagarlo: `SAP_INVENTORY_ENABLED: "false"`.
+
+**Sincronizar a mano:** como dueño, entra a **Ajustes WMS** (o al dashboard
+**Desempeño WMS**) y pulsa *Sincronizar ahora*. Ahí mismo ves la bitácora de
+corridas: archivo, filas leídas, partes actualizadas y el error si algo falló.
+
+**¿Se cayó tu script de SAP?** La tarjeta *Ingesta de inventario SAP* del
+dashboard se pone en rojo cuando pasan más de 90 minutos (configurable) sin una
+sincronización exitosa.
+
+## 4. Cómo se usa
+
+1. **Producción** entra a *Solicitar Material*, escribe o escanea el número de
+   parte (la descripción y la unidad se autocompletan del inventario de SAP),
+   pone cantidad y prioridad, y envía. Si SAP reporta menos de lo que pide, se
+   le avisa — pero **la solicitud nunca se bloquea**.
+2. La solicitud aparece en el tablero de **Almacén** en segundos, ordenada por
+   **urgentes primero y luego la más vieja**.
+3. Almacén **toma** la solicitud (queda registrado quién y cuándo), la **surte**
+   total o parcialmente, o la **libera** de vuelta a la cola si no puede
+   completarla (sin perder el historial de quién la tenía).
+4. Todo cambio de estado se agrega a una **bitácora inmutable**: nunca se
+   sobrescribe, solo se agregan renglones.
+
+### El semáforo
+| Color | Tiempo sin surtir | Cómo se ve |
+|-------|-------------------|------------|
+| 🟢 Verde | 0 – 20 min | tarjeta normal |
+| 🟡 Amarillo | 20 – 60 min | fondo ámbar |
+| 🔴 Rojo | más de 60 min | **fondo rojo intenso, texto blanco y pulso** |
+
+Los tres umbrales se editan en **Ajustes WMS** (no están fijos en el código).
+Cuando hay solicitudes en rojo, además:
+- suena un tono corto (cada operador puede silenciarlo con la campanita),
+- el **título de la pestaña parpadea** y el **favicon muestra el contador**, para
+  que se note aunque el navegador esté en segundo plano,
+- el menú lateral muestra el número en rojo.
+
+### Exportar a Excel
+En **Desempeño WMS**, botón **Excel**. Baja un `.xlsx` con dos hojas:
+- **Solicitudes**: folio, parte, descripción, cantidad solicitada y surtida,
+  quién pidió, quién surtió, fechas, minutos de respuesta, SLA, status y locación.
+- **KPIs por persona**: el resumen de almacén y de producción del mismo periodo.
+
+## 5. Publicarlo como pestaña de Microsoft Teams
+
+La app **no necesita hosting público**: basta con que la PC donde corre sea
+alcanzable desde la red o la VPN de la empresa.
+
+1. **Fija la IP o el nombre del servidor.** Digamos `wms.empresa.local` o
+   `192.168.1.50`.
+2. **Ajusta la URL del backend.** En `docker-compose.yml`, servicio `frontend`:
+   ```yaml
+   args:
+     REACT_APP_BACKEND_URL: http://wms.empresa.local:8001
+   ```
+   y en el servicio `backend`, permite ese origen:
+   ```yaml
+   CORS_ORIGINS: "http://wms.empresa.local:3000"
+   ```
+   Reconstruye: `docker compose up -d --build`.
+3. **Pon HTTPS.** Teams **solo embebe páginas por HTTPS**; con `http://` la
+   pestaña sale en blanco. Necesitas un proxy inverso con certificado delante
+   de la app — Caddy, IIS o Nginx sirven; el certificado puede ser de la CA
+   interna de la empresa, siempre que las computadoras ya confíen en ella.
+   Ejemplo mínimo con Caddy (`Caddyfile`):
+   ```
+   wms.empresa.local {
+     tls /ruta/cert.pem /ruta/llave.pem
+     handle /api/* { reverse_proxy localhost:8001 }
+     handle        { reverse_proxy localhost:3000 }
+   }
+   ```
+4. **Agrégala en Teams.** En el canal → **+** → **Sitio web** → pega
+   `https://wms.empresa.local` → nómbrala *WMS Almacén* → Guardar.
+
+La cabecera que Teams necesita (`Content-Security-Policy: frame-ancestors`) ya
+viene puesta en `frontend/nginx.conf`; si metes tu propio proxy delante,
+asegúrate de que no la reescriba ni agregue un `X-Frame-Options: DENY`.
+
+> La app es **responsive**: la misma URL sirve para la tablet del piso, el
+> celular y la pestaña de Teams en la computadora.
+
+## 6. Si algo falla
+
+- **"No se encontró ningún archivo"** → revisa que el volumen apunte a la
+  carpeta correcta y que el script de SAP siga corriendo en el Task Scheduler.
+- **"No se reconocieron las columnas"** → tu export usa otros encabezados: llena
+  las variables `SAP_COL_*` con los nombres exactos de tu archivo.
+- **Las cantidades salen ×1000** → fija `SAP_DECIMAL_SEPARATOR` con el separador
+  decimal real de tu export.
+- **"Tu usuario no tiene una locación asignada"** → como dueño, edita al usuario
+  en **Usuarios** y asígnale su planta.

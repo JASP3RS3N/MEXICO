@@ -34,6 +34,17 @@ module.exports = {
         body: ['"Instrument Sans"', '-apple-system', 'sans-serif'],
         mono: ['"JetBrains Mono"', 'monospace'],
       },
+      keyframes: {
+        // Pulso del tablero de almacén: una solicitud en rojo late para que se
+        // note de reojo desde el piso, sin llegar a un parpadeo agresivo.
+        'pulse-alert': {
+          '0%, 100%': { opacity: '1', boxShadow: '0 0 0 0 rgba(239,68,68,0.55)' },
+          '50%': { opacity: '0.92', boxShadow: '0 0 0 12px rgba(239,68,68,0)' },
+        },
+      },
+      animation: {
+        'pulse-alert': 'pulse-alert 1.6s ease-in-out infinite',
+      },
       backgroundImage: {
         'grad-main': 'linear-gradient(135deg, #00e5a0 0%, #0ea5e9 100%)',
         'grad-purple': 'linear-gradient(135deg, #a855f7 0%, #6366f1 100%)',

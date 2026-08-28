@@ -41,9 +41,24 @@ services:
       # --- Fiscal (CFDI 4.0) / Asistente IA: búsqueda web ---
       FISCAL_ENCRYPTION_KEY: ${FISCAL_ENCRYPTION_KEY}
       FIRECRAWL_MCP_URL: ${FIRECRAWL_MCP_URL}
+      # --- WMS Producción ↔ Almacén: ingesta de inventario SAP (SOLO LECTURA) ---
+      # Deja el export de MB52 en la carpeta que montas abajo en volumes.
+      # La app solo LEE ese archivo; nunca escribe hacia SAP.
+      SAP_INVENTORY_ENABLED: "true"
+      SAP_INVENTORY_EXPORT_PATH: /data/sap_export
+      SAP_INVENTORY_FILE_GLOB: "*.*"
+      SAP_INVENTORY_SYNC_MINUTES: "60"
+      SAP_INVENTORY_TENANT_SLUG: ""
+      SAP_LOCATION_MODE: plant_sloc
+      SAP_DECIMAL_SEPARATOR: auto
     extra_hosts:
       # Permite que el contenedor llegue a LM Studio corriendo en el host.
       - "host.docker.internal:host-gateway"
+    volumes:
+      # Carpeta donde tu script de SAP deja el export de MB52. Cambia la ruta de
+      # la IZQUIERDA por tu carpeta real (ej. "C:/sap_export" o "//SERVIDOR/sap").
+      # Se monta :ro (read-only) a propósito: la ingesta es unidireccional.
+      - ./sap_export:/data/sap_export:ro
     ports:
       - "8001:8001"
     depends_on:

@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from config import (
+    PASSWORD_LOGIN_ROLES,
     PIN_LOCKOUT_MINUTES,
     PIN_MAX_ATTEMPTS,
     ROLE_CASHIER,
@@ -51,6 +52,14 @@ async def _with_tenant_slug(user_public: dict) -> dict:
     return {**user_public, "tenant_slug": slug}
 
 
+async def _validate_location(tenant_id: str, location_id) -> None:
+    """Ensure a WMS location belongs to this tenant. None/"" = sin locación."""
+    if not location_id:
+        return
+    if not await db.wms_locations.find_one(tenant_query(tenant_id, {"id": location_id})):
+        raise HTTPException(status_code=404, detail="Locación no encontrada")
+
+
 @router.post("/auth/login")
 async def login(payload: LoginRequest):
     user = await db.users.find_one({"username": payload.username.lower().strip()})
@@ -59,7 +68,10 @@ async def login(payload: LoginRequest):
     if not user.get("active", True):
         raise HTTPException(status_code=403, detail="Usuario desactivado")
     # Cashier/prep must authenticate by PIN on an activated device, not here.
-    if user["role"] in (ROLE_CASHIER, ROLE_PREP):
+    # Production/warehouse are in PASSWORD_LOGIN_ROLES on purpose: they open the
+    # app in their own browser (or a Teams tab), where there is no shared
+    # activated device to swap identities on.
+    if user["role"] not in PASSWORD_LOGIN_ROLES:
         raise HTTPException(
             status_code=403,
             detail="Los cajeros y preparadores deben iniciar sesión con su PIN, no con usuario y contraseña.",
@@ -177,6 +189,8 @@ async def create_user(payload: UserCreate, user: dict = Depends(require_owner)):
     if payload.role in (ROLE_CASHIER, ROLE_PREP):
         pin = await generate_unique_pin(tenant_id)
 
+    await _validate_location(tenant_id, payload.location_id)
+
     doc = {
         "id": gen_id(),
         "username": username,
@@ -186,6 +200,7 @@ async def create_user(payload: UserCreate, user: dict = Depends(require_owner)):
         "email": payload.email,
         "pin": pin,
         "password_hash": hash_password(payload.password),
+        "location_id": payload.location_id or None,  # WMS: planta/locación
         "active": True,
         "created_at": now_iso(),
     }
@@ -225,6 +240,12 @@ async def update_user(user_id: str, payload: UserUpdate, user: dict = Depends(re
         updates["email"] = payload.email
     if payload.password:
         updates["password_hash"] = hash_password(payload.password)
+    if payload.location_id is not None:
+        # "" clears the assignment (supervisor sin planta fija); any other value
+        # must be a real location of this tenant.
+        location_id = payload.location_id or None
+        await _validate_location(tenant_id, location_id)
+        updates["location_id"] = location_id
 
     # Guardrail: never lock out the last active owner of this tenant.
     if (updates.get("role") and updates["role"] != "owner") or updates.get("active") is False:

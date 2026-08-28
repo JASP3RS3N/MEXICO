@@ -50,20 +50,65 @@ SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
 SMTP_FROM_NAME = os.environ.get("SMTP_FROM_NAME", "Smokehouse OS")
 
 # ---------------------------------------------------------------------------
+# Ingesta de inventario SAP (SOLO LECTURA, unidireccional vía archivo plano)
+# ---------------------------------------------------------------------------
+# Un script externo (SAP GUI Scripting / RFC, corrido por el Task Scheduler de
+# Windows) deja el export de MB52 en esta carpeta. La app SOLO lee ese archivo:
+# no existe ninguna ruta de escritura hacia SAP en todo el proyecto.
+SAP_INVENTORY_ENABLED = os.environ.get("SAP_INVENTORY_ENABLED", "true").lower() == "true"
+SAP_INVENTORY_EXPORT_PATH = os.environ.get("SAP_INVENTORY_EXPORT_PATH", "/data/sap_export")
+SAP_INVENTORY_FILE_GLOB = os.environ.get("SAP_INVENTORY_FILE_GLOB", "*.*")
+SAP_INVENTORY_SYNC_MINUTES = int(os.environ.get("SAP_INVENTORY_SYNC_MINUTES", "60"))
+# Tenant al que pertenece el export. Vacío = el único tenant existente (o el
+# primero creado), que es el caso normal de una instalación en planta.
+SAP_INVENTORY_TENANT_SLUG = os.environ.get("SAP_INVENTORY_TENANT_SLUG", "").strip()
+# Cómo se arma la locación a partir del export: "plant" (solo centro/WERKS) o
+# "plant_sloc" (centro + almacén/LGORT, p. ej. "1000/0001").
+SAP_LOCATION_MODE = os.environ.get("SAP_LOCATION_MODE", "plant_sloc").strip().lower()
+# Mapeo de columnas del export. Vacío = autodetección por alias (ver
+# sap_inventory_ingest.COLUMN_ALIASES), que ya cubre MB52 en inglés y español.
+SAP_COL_PART_NUMBER = os.environ.get("SAP_COL_PART_NUMBER", "").strip()
+SAP_COL_DESCRIPTION = os.environ.get("SAP_COL_DESCRIPTION", "").strip()
+SAP_COL_PLANT = os.environ.get("SAP_COL_PLANT", "").strip()
+SAP_COL_STORAGE_LOCATION = os.environ.get("SAP_COL_STORAGE_LOCATION", "").strip()
+SAP_COL_QTY = os.environ.get("SAP_COL_QTY", "").strip()
+SAP_COL_UOM = os.environ.get("SAP_COL_UOM", "").strip()
+# Separador decimal del export: "auto" lo deduce de la columna de cantidad del
+# propio archivo; "." o "," lo fijan cuando el export es ambiguo.
+SAP_DECIMAL_SEPARATOR = os.environ.get("SAP_DECIMAL_SEPARATOR", "auto").strip()
+
+# ---------------------------------------------------------------------------
 # Domain constants
 # ---------------------------------------------------------------------------
-ROLE_OWNER = "owner"       # Dueño: acceso total, único que ve finanzas
+ROLE_OWNER = "owner"       # Dueño / Supervisor: acceso total, único que ve finanzas
 ROLE_CASHIER = "cashier"   # Cajera: levanta órdenes y cobra
 ROLE_PREP = "prep"         # Preparación: acepta y avanza comandas
+ROLE_PRODUCTION = "production"  # WMS: producción, solicita material al almacén
+ROLE_WAREHOUSE = "warehouse"    # WMS: almacén, toma y surte las solicitudes
 ROLE_SUPERADMIN = "superadmin"  # Plataforma: administra todos los tenants
-ROLES = [ROLE_OWNER, ROLE_CASHIER, ROLE_PREP, ROLE_SUPERADMIN]
+ROLES = [
+    ROLE_OWNER,
+    ROLE_CASHIER,
+    ROLE_PREP,
+    ROLE_PRODUCTION,
+    ROLE_WAREHOUSE,
+    ROLE_SUPERADMIN,
+]
 
 ROLE_LABELS = {
     ROLE_OWNER: "Dueño",
     ROLE_CASHIER: "Cajera",
     ROLE_PREP: "Preparación",
+    ROLE_PRODUCTION: "Producción",
+    ROLE_WAREHOUSE: "Almacén",
     ROLE_SUPERADMIN: "Super Admin",
 }
+
+# Roles that authenticate with username + password. Cashier/prep are excluded on
+# purpose: they swap in by PIN on a device the owner activated (see routes_auth).
+# Production/warehouse DO use a password — each person opens the app in their own
+# browser (or a Microsoft Teams tab), so there is no shared activated device.
+PASSWORD_LOGIN_ROLES = [ROLE_OWNER, ROLE_PRODUCTION, ROLE_WAREHOUSE, ROLE_SUPERADMIN]
 
 # Order lifecycle (comanda)
 ORDER_PENDING = "pending"       # creada por caja, esperando cocina
@@ -86,6 +131,43 @@ PO_DRAFT = "draft"
 PO_ORDERED = "ordered"
 PO_RECEIVED = "received"
 PO_CANCELLED = "cancelled"
+
+
+# ---------------------------------------------------------------------------
+# WMS Producción ↔ Almacén
+# ---------------------------------------------------------------------------
+# Material request lifecycle (solicitud de material)
+WMS_PENDING = "pendiente"                  # creada por producción, nadie la ha tomado
+WMS_IN_PROGRESS = "en_proceso"             # un surtidor de almacén la tomó
+WMS_PARTIAL = "surtido_parcial"            # se entregó menos de lo solicitado y se cerró
+WMS_COMPLETE = "surtido_completo"          # se entregó todo lo solicitado
+WMS_CANCELLED = "cancelado"
+WMS_STATUSES = [WMS_PENDING, WMS_IN_PROGRESS, WMS_PARTIAL, WMS_COMPLETE, WMS_CANCELLED]
+# Estados que siguen consumiendo tiempo en el tablero (los que se pintan con semáforo).
+WMS_OPEN_STATUSES = [WMS_PENDING, WMS_IN_PROGRESS]
+
+WMS_PRIORITY_NORMAL = "normal"
+WMS_PRIORITY_URGENT = "urgente"
+WMS_PRIORITIES = [WMS_PRIORITY_NORMAL, WMS_PRIORITY_URGENT]
+
+# Acciones registradas en la bitácora inmutable (wms_audit_log).
+WMS_ACTION_CREATED = "created"
+WMS_ACTION_CLAIMED = "claimed"
+WMS_ACTION_RELEASED = "released"
+WMS_ACTION_FULFILLED = "fulfilled"
+WMS_ACTION_CLOSED = "closed"
+WMS_ACTION_CANCELLED = "cancelled"
+
+# Umbrales por defecto del semáforo y del SLA. Configurables por tenant desde
+# Ajustes (settings.wms_config); esto es solo el fallback cuando no se han tocado.
+WMS_DEFAULT_CONFIG = {
+    "green_max_minutes": 20,        # verde: 0–20 min
+    "yellow_max_minutes": 60,       # amarillo: 20–60 min; rojo alto contraste: >60
+    "sla_minutes": 30,              # meta de surtido para el % dentro de SLA
+    "sound_alert_enabled": True,    # tono al haber solicitudes en rojo (toggle en la UI)
+    "poll_seconds": 8,              # cada cuánto refresca el tablero de almacén
+    "sap_sync_stale_minutes": 90,   # sin sync exitoso en este tiempo = ingesta caída
+}
 
 
 # ---------------------------------------------------------------------------

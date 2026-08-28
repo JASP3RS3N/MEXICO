@@ -15,7 +15,11 @@ from config import (
     ROLE_CASHIER,
     ROLE_OWNER,
     ROLE_PREP,
+    ROLE_PRODUCTION,
+    ROLE_WAREHOUSE,
     ROLE_SUPERADMIN,
+    SAP_INVENTORY_ENABLED,
+    SAP_INVENTORY_SYNC_MINUTES,
     client,
     db,
     gen_id,
@@ -31,6 +35,9 @@ import routes_ai
 import routes_people
 import routes_alerts
 import routes_admin
+import routes_wms_requests
+import routes_wms_inventory
+import routes_wms_dashboard
 
 logging.basicConfig(
     level=logging.INFO,
@@ -62,6 +69,10 @@ api_router.include_router(routes_finance.router, tags=["finance"])
 api_router.include_router(routes_ai.router, tags=["ai"])
 api_router.include_router(routes_people.router, tags=["people"])
 api_router.include_router(routes_alerts.router, tags=["alerts"])
+# WMS Producción ↔ Almacén (solicitudes, inventario SAP de solo lectura, KPIs).
+api_router.include_router(routes_wms_requests.router, tags=["wms"])
+api_router.include_router(routes_wms_inventory.router, tags=["wms-inventory"])
+api_router.include_router(routes_wms_dashboard.router, tags=["wms-dashboard"])
 
 app.include_router(api_router)
 
@@ -87,6 +98,20 @@ async def _ensure_indexes():
         await db.orders.create_index("status")
         await db.orders.create_index("paid_at")
         await db.materials.create_index("name")
+        # WMS: el tablero filtra por estado/locación y ordena por antigüedad;
+        # el snapshot se lee siempre por (tenant, parte, locación).
+        await db.wms_requests.create_index([("tenant_id", 1), ("status", 1), ("requested_at", 1)])
+        await db.wms_requests.create_index([("tenant_id", 1), ("location_id", 1), ("status", 1)])
+        await db.wms_requests.create_index("id", unique=True)
+        await db.wms_fulfillments.create_index([("tenant_id", 1), ("fulfilled_at", -1)])
+        await db.wms_fulfillments.create_index("request_id")
+        await db.wms_audit_log.create_index([("tenant_id", 1), ("request_id", 1), ("created_at", 1)])
+        await db.wms_inventory_snapshots.create_index(
+            [("tenant_id", 1), ("part_number", 1), ("location_id", 1)], unique=True
+        )
+        await db.wms_inventory_snapshots.create_index([("tenant_id", 1), ("location_id", 1)])
+        await db.wms_locations.create_index([("tenant_id", 1), ("code", 1)], unique=True)
+        await db.wms_sap_sync_logs.create_index([("tenant_id", 1), ("started_at", -1)])
     except Exception as exc:  # noqa: BLE001 - index creation is best-effort
         logger.warning("No se pudieron crear índices: %s", exc)
 
@@ -137,18 +162,38 @@ async def _seed_demo_tenant():
     tenant_id = tenant["id"]
 
     await _seed_settings(tenant_id)
-    await _seed_users(tenant_id)
+    location = await _seed_wms_location(tenant_id)
+    await _seed_users(tenant_id, location["id"])
     await _seed_catalog(tenant_id)
     logger.info("Tenant demo creado (slug=demo).")
 
 
-async def _seed_users(tenant_id: str):
+async def _seed_wms_location(tenant_id: str) -> dict:
+    """Locación demo del WMS. La ingesta de SAP creará las reales al importar."""
+    doc = {
+        "id": gen_id(),
+        "tenant_id": tenant_id,
+        "code": "1000/0001",
+        "plant_code": "1000",
+        "name": "Planta 1000 · Almacén 0001",
+        "active": True,
+        "created_at": now_iso(),
+        "source": "seed",
+    }
+    await db.wms_locations.insert_one(doc)
+    return doc
+
+
+async def _seed_users(tenant_id: str, location_id: str = None):
+    # (rol, usuario, nombre, contraseña, ¿lleva locación WMS?)
     defaults = [
-        (ROLE_OWNER, "dueno", "Dueño", "dueno123"),
-        (ROLE_CASHIER, "caja", "Cajera", "caja123"),
-        (ROLE_PREP, "cocina", "Preparación", "cocina123"),
+        (ROLE_OWNER, "dueno", "Dueño", "dueno123", False),
+        (ROLE_CASHIER, "caja", "Cajera", "caja123", False),
+        (ROLE_PREP, "cocina", "Preparación", "cocina123", False),
+        (ROLE_PRODUCTION, "produccion", "Producción", "produccion123", True),
+        (ROLE_WAREHOUSE, "almacen", "Almacén", "almacen123", True),
     ]
-    for role, username, name, pwd in defaults:
+    for role, username, name, pwd, needs_location in defaults:
         await db.users.insert_one(
             {
                 "id": gen_id(),
@@ -158,11 +203,12 @@ async def _seed_users(tenant_id: str):
                 "tenant_id": tenant_id,
                 "pin": None,
                 "password_hash": hash_password(pwd),
+                "location_id": location_id if needs_location else None,
                 "active": True,
                 "created_at": now_iso(),
             }
         )
-    logger.info("Usuarios semilla creados (dueno/caja/cocina).")
+    logger.info("Usuarios semilla creados (dueno/caja/cocina/produccion/almacen).")
 
 
 async def _seed_settings(tenant_id: str):
@@ -256,14 +302,90 @@ async def _seed_catalog(tenant_id: str):
     logger.info("Catálogo demo creado (%d productos, %d materias primas).", len(products), len(materials_def))
 
 
+# ---------------------------------------------------------------------------
+# Scheduler del WMS
+# ---------------------------------------------------------------------------
+# Dos trabajos periódicos: la ingesta del export de SAP (solo lectura) y el
+# barrido de solicitudes atrasadas que alimenta la campanita de alertas.
+# APScheduler corre dentro del mismo proceso de uvicorn, así que no hace falta
+# un cron aparte en el contenedor.
+_scheduler = None
+
+# Cada cuánto se revisa si hay solicitudes que ya rebasaron el umbral rojo. El
+# tablero de almacén ya lo pinta en vivo; esto es solo para persistir la alerta.
+OVERDUE_SCAN_MINUTES = 5
+
+
+async def _sap_sync_job():
+    """Ingesta horaria del export de SAP. Nunca escribe hacia SAP."""
+    from sap_inventory_ingest import sync_all_tenants
+
+    try:
+        await sync_all_tenants(trigger="scheduler")
+    except Exception as exc:  # noqa: BLE001 - un fallo de ingesta no tumba la app
+        logger.warning("Job de ingesta SAP falló: %s", exc)
+
+
+async def _overdue_scan_job():
+    """Alertas de solicitudes de material atrasadas, por tenant."""
+    from alerts import scan_overdue_requests
+
+    try:
+        tenants = await db.tenants.find({"active": True}, {"_id": 0, "id": 1}).to_list(500)
+        for tenant in tenants:
+            await scan_overdue_requests(tenant["id"])
+    except Exception as exc:  # noqa: BLE001 - las alertas nunca deben tumbar la app
+        logger.warning("Job de solicitudes atrasadas falló: %s", exc)
+
+
+def _start_scheduler():
+    """Arranca los jobs del WMS. Silencioso si APScheduler no está instalado."""
+    global _scheduler
+    try:
+        from apscheduler.schedulers.asyncio import AsyncIOScheduler
+    except ImportError:
+        logger.warning("APScheduler no está instalado: la ingesta SAP solo correrá manualmente.")
+        return
+
+    _scheduler = AsyncIOScheduler(timezone="UTC")
+    if SAP_INVENTORY_ENABLED:
+        _scheduler.add_job(
+            _sap_sync_job,
+            "interval",
+            minutes=SAP_INVENTORY_SYNC_MINUTES,
+            id="sap_inventory_sync",
+            # Al arrancar no se corre de inmediato: se espera un intervalo para
+            # no pelear con el arranque del contenedor.
+            max_instances=1,
+            coalesce=True,
+        )
+    _scheduler.add_job(
+        _overdue_scan_job,
+        "interval",
+        minutes=OVERDUE_SCAN_MINUTES,
+        id="wms_overdue_scan",
+        max_instances=1,
+        coalesce=True,
+    )
+    _scheduler.start()
+    logger.info(
+        "Scheduler WMS iniciado (ingesta SAP cada %s min, alertas cada %s min).",
+        SAP_INVENTORY_SYNC_MINUTES if SAP_INVENTORY_ENABLED else "—",
+        OVERDUE_SCAN_MINUTES,
+    )
+
+
 @app.on_event("startup")
 async def startup():
     await _ensure_indexes()
     await _seed_superadmin()
     await _seed_demo_tenant()
+    _start_scheduler()
     logger.info("Smokehouse API lista.")
 
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
+    if _scheduler is not None:
+        _scheduler.shutdown(wait=False)
     client.close()

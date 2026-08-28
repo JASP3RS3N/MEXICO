@@ -23,6 +23,10 @@ import Assistant from "@/pages/Assistant";
 import Suppliers from "@/pages/Suppliers";
 import Employees from "@/pages/Employees";
 import Alerts from "@/pages/Alerts";
+import Solicitudes from "@/pages/wms/Solicitudes";
+import Almacen from "@/pages/wms/Almacen";
+import WmsDashboard from "@/pages/wms/WmsDashboard";
+import WmsAjustes from "@/pages/wms/WmsAjustes";
 
 function RoleHome() {
   const { user } = useAuth();
@@ -71,6 +75,12 @@ export default function App() {
           <Route path="/gastos" element={<Protected roles={["owner"]}><Expenses /></Protected>} />
           <Route path="/usuarios" element={<Protected roles={["owner"]}><Users /></Protected>} />
           <Route path="/ajustes" element={<Protected roles={["owner"]}><SettingsPage /></Protected>} />
+
+          {/* WMS Producción ↔ Almacén */}
+          <Route path="/wms/solicitudes" element={<Protected roles={["owner", "production"]}><Solicitudes /></Protected>} />
+          <Route path="/wms/almacen" element={<Protected roles={["owner", "warehouse"]}><Almacen /></Protected>} />
+          <Route path="/wms/desempeno" element={<Protected roles={["owner"]}><WmsDashboard /></Protected>} />
+          <Route path="/wms/ajustes" element={<Protected roles={["owner"]}><WmsAjustes /></Protected>} />
 
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

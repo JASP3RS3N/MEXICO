@@ -1,0 +1,9 @@
+Carpeta donde tu script de SAP deja el export de MB52.
+
+docker-compose.yml la monta como /data/sap_export dentro del contenedor, en
+modo solo lectura. Si tu export vive en otra ruta (una carpeta de red, por
+ejemplo), cambia el lado izquierdo del volumen en docker-compose.yml en vez de
+copiar los archivos aquí.
+
+Este archivo solo existe para que la carpeta viaje en git; puedes borrarlo en
+cuanto haya un export real.
