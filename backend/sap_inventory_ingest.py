@@ -96,7 +96,29 @@ COLUMN_ALIASES = {
     # Solo se usa para reconocer el renglón de importes de los bloques (y para
     # afinar el separador decimal); nunca se guarda.
     "currency": ["crcy", "moneda", "waers", "curr"],
+    # Las demás categorías de stock de MB52. NO cuentan como disponible —eso es
+    # solo libre utilización— pero se guardan para poder decirle a Producción
+    # que el material existe aunque ahorita no se le pueda surtir.
+    # "restricted use" va antes que "restricted" para que gane la coincidencia
+    # exacta y no se confunda con la columna de libre utilización.
+    "transit": [
+        "transit transf", "transit", "stock in transit", "transito", "en transito",
+        "traslado", "translado", "en traslado",
+    ],
+    "quality_inspection": [
+        "in quality insp", "quality inspection", "quality insp", "insp calidad",
+        "en control de calidad", "control de calidad", "inspeccion de calidad",
+    ],
+    "restricted": [
+        "restricted use", "restricted", "uso restringido", "restringido",
+    ],
+    "blocked": ["blocked", "bloqueado", "stock bloqueado"],
+    "returns": ["returns", "devoluciones", "devolucion"],
 }
+
+# Categorías que se guardan aparte del disponible, en el orden en que conviene
+# mostrarlas: primero la que más probablemente se convierta en stock usable.
+STOCK_CATEGORY_FIELDS = ("transit", "quality_inspection", "restricted", "blocked", "returns")
 
 # Mapeo explícito por variables de entorno; si un campo viene vacío se cae a la
 # autodetección por alias.
@@ -492,6 +514,10 @@ def parse_blocks(raw_rows: list, first_data: int, material_map: dict, quantity_m
                     "storage_location": _column(quantity_row, quantity_map, "storage_location"),
                     "qty_text": _column(quantity_row, quantity_map, "qty"),
                     "uom": _column(quantity_row, quantity_map, "uom"),
+                    "categories": {
+                        field: _column(quantity_row, quantity_map, field)
+                        for field in STOCK_CATEGORY_FIELDS
+                    },
                 }
             )
 
@@ -566,6 +592,7 @@ def parse_export(path: str) -> tuple:
                 "available_quantity": 0.0,
                 "unit_of_measure": "",
                 "storage_locations": {},
+                "other_stock": {field: 0.0 for field in STOCK_CATEGORY_FIELDS},
             }
         # MB52 desglosa por almacén y lote: se acumula en vez de sobrescribir.
         item["available_quantity"] += quantity
@@ -575,6 +602,11 @@ def parse_export(path: str) -> tuple:
             item["storage_locations"][storage_location] = round(
                 item["storage_locations"].get(storage_location, 0.0) + quantity, 3
             )
+        # Las otras categorías se acumulan igual, pero nunca entran al disponible.
+        for field, raw in (entry.get("categories") or {}).items():
+            value = parse_sap_number(raw, decimal_separator)
+            if value:
+                item["other_stock"][field] += value
 
     items = []
     for item in aggregated.values():
@@ -585,6 +617,13 @@ def parse_export(path: str) -> tuple:
             {"code": code, "quantity": quantity}
             for code, quantity in sorted(item["storage_locations"].items(), key=lambda kv: -kv[1])
         ]
+        # Solo se guardan las categorías con algo: llevar cinco ceros por cada
+        # parte engordaría el snapshot sin decir nada.
+        item["other_stock"] = {
+            field: round(item["other_stock"][field], 3)
+            for field in STOCK_CATEGORY_FIELDS
+            if item["other_stock"][field]
+        }
         items.append(item)
 
     stats = {
@@ -616,6 +655,9 @@ def _parse_flat(rows: list) -> tuple:
                 "storage_location": _column(cells, mapping, "storage_location"),
                 "qty_text": _column(cells, mapping, "qty"),
                 "uom": _column(cells, mapping, "uom"),
+                "categories": {
+                    field: _column(cells, mapping, field) for field in STOCK_CATEGORY_FIELDS
+                },
             }
         )
     columns = {field: position for field, position in sorted(mapping.items())}
@@ -690,6 +732,9 @@ async def store_snapshots(tenant_id: str, items: list, sync_id: str, snapshot_ti
                     # Desglose por almacén: el total es la suma, pero al
                     # surtidor le sirve saber en qué almacén está el material.
                     "storage_locations": item.get("storage_locations", []),
+                    # Stock que existe pero no es surtible (tránsito, calidad,
+                    # restringido, bloqueado, devoluciones). Solo informativo.
+                    "other_stock": item.get("other_stock", {}),
                     "plant_code": item["plant_code"],
                     "location_code": code,
                     "snapshot_timestamp": snapshot_timestamp,

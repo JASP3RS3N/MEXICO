@@ -62,8 +62,11 @@ def _row(*pairs) -> str:
 MB52_BLOCKS = "\n".join([
     "",
     _row((1, "Material Number"), (4, "Material Description"), (27, "Plnt"), (28, "Name 1")),
-    _row((1, "SLoc"), (2, "SL"), (3, "      Unrestricted"), (9, "Unit"), (14, "   Transit/Transf.")),
-    _row((3, "       Total Value"), (9, "Crcy"), (14, "       Total Value")),
+    _row((1, "SLoc"), (2, "SL"), (3, "      Unrestricted"), (9, "Unit"), (14, "   Transit/Transf."),
+         (26, "  In Quality Insp."), (29, "    Restricted-Use"), (30, "           Blocked"),
+         (31, "           Returns")),
+    _row((3, "       Total Value"), (9, "Crcy"), (14, "       Total Value"), (26, "       Total Value"),
+         (29, "       Total Value"), (30, "       Total Value"), (31, "       Total Value")),
     "",
     # Una sola locación de almacén.
     _row((1, "MAT-1001"), (4, "TORNILLO HEXAGONAL M8"), (27, "1000"), (28, "Planta Uno")),
@@ -72,20 +75,23 @@ MB52_BLOCKS = "\n".join([
     "",
     # Dos almacenes del mismo centro: se suman y se guarda el desglose.
     _row((1, "MAT-2002"), (4, "LÁMINA ACERO 90° 2MM"), (27, "1000"), (28, "Planta Uno")),
-    _row((1, "1001"), (3, "        5,232.854"), (9, "KG"), (14, "                0")),
-    _row((3, "        41,862.83"), (9, "USD"), (14, "             0.00")),
-    _row((1, "1011"), (3, "          164.000"), (9, "KG"), (14, "                0")),
-    _row((3, "         1,312.00"), (9, "USD"), (14, "             0.00")),
+    _row((1, "1001"), (3, "        5,232.854"), (9, "KG"), (14, "           25.500")),
+    _row((3, "        41,862.83"), (9, "USD"), (14, "           204.00")),
+    _row((1, "1011"), (3, "          164.000"), (9, "KG"), (14, "           10.500")),
+    _row((3, "         1,312.00"), (9, "USD"), (14, "            84.00")),
     "",
     # Cantidad negativa (SAP las emite con el signo al frente).
     _row((1, "MAT-3003"), (4, "EMPAQUE DE HULE"), (27, "1000"), (28, "Planta Uno")),
     _row((1, "1001"), (3, "             -609"), (9, "PC"), (14, "                0")),
     _row((3, "          -487.20"), (9, "USD"), (14, "             0.00")),
     "",
-    # Sin almacén: libre utilización en cero, todo en tránsito.
+    # Sin almacén y sin libre utilización: todo el material está en otras
+    # categorías (tránsito, calidad, bloqueado). No es surtible, pero existe.
     _row((1, "MAT-5005"), (4, "VALVULA EN TRANSITO"), (27, "1000"), (28, "Planta Uno")),
-    _row((3, "                0"), (9, "PC"), (14, "              500")),
-    _row((3, "             0.00"), (9, "USD"), (14, "           376.45")),
+    _row((3, "                0"), (9, "PC"), (14, "              500"), (26, "              120"),
+         (30, "               30")),
+    _row((3, "             0.00"), (9, "USD"), (14, "           376.45"), (26, "            90.35"),
+         (30, "            22.59")),
     "",
     # Otro centro: se convierte en una locación aparte.
     _row((1, "MAT-4004"), (4, "GRASA INDUSTRIAL"), (27, "2000"), (28, "Planta Dos")),
@@ -181,8 +187,27 @@ try:
         )
         check("respeta las cantidades negativas", by_part["MAT-3003"]["available_quantity"] == -609)
         check(
-            "libre utilización en cero cuando todo está en tránsito",
+            "libre utilización en cero cuando todo está en otras categorías",
             by_part["MAT-5005"]["available_quantity"] == 0,
+        )
+
+        # Las demás categorías de MB52: existen, pero NO son surtibles y por lo
+        # tanto nunca deben sumarse al disponible.
+        check(
+            "guarda tránsito, calidad y bloqueado por separado",
+            by_part["MAT-5005"]["other_stock"] == {"transit": 500.0, "quality_inspection": 120.0, "blocked": 30.0},
+        )
+        check(
+            "el no surtible no se suma al disponible",
+            by_part["MAT-5005"]["available_quantity"] == 0,
+        )
+        check(
+            "suma el tránsito de los dos almacenes (25.5 + 10.5)",
+            by_part["MAT-2002"]["other_stock"] == {"transit": 36.0},
+        )
+        check(
+            "las categorías vacías no se guardan",
+            by_part["MAT-1001"]["other_stock"] == {},
         )
         check("toma la descripción del export", by_part["MAT-1001"]["description"] == "TORNILLO HEXAGONAL M8")
         check("toma la unidad de medida", by_part["MAT-2002"]["unit_of_measure"] == "KG")
@@ -219,6 +244,10 @@ try:
         check(
             "1.250,000 + 380,500 = 1630,5 en notación europea",
             abs(parts[0]["available_quantity"] - 1630.5) < 0.001,
+        )
+        check(
+            "sin columnas de otras categorías, other_stock queda vacío",
+            parts[0]["other_stock"] == {},
         )
 
         # Se restaura el export de bloques para el resto de las pruebas.

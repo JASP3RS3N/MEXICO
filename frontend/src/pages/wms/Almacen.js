@@ -23,8 +23,10 @@ import {
   alertLevel,
   elapsedMinutes,
   formatMinutes,
+  formatOtherStock,
   formatQty,
   levelStyle,
+  otherStockTotal,
 } from "@/lib/wms";
 
 const SOUND_KEY = "wms_sound_enabled";
@@ -453,10 +455,21 @@ export default function Almacen() {
                   que el surtidor recorra el centro buscándolo. */}
               {stockDetail?.storage_locations?.length > 0 && (
                 <p className="text-xs text-textDim mt-2">
-                  Según SAP está en:{" "}
+                  Según SAP hay {formatQty(stockDetail.available_quantity, stockDetail.unit_of_measure)}{" "}
+                  disponible en:{" "}
                   {stockDetail.storage_locations
                     .map((sl) => `almacén ${sl.code} (${formatQty(sl.quantity)})`)
                     .join(" · ")}
+                </p>
+              )}
+              {/* Stock que existe pero no es surtible. Cambia la respuesta a
+                  Producción: no es un quiebre, es material por liberarse. */}
+              {otherStockTotal(stockDetail) > 0 && (
+                <p className="text-xs text-amber-300 mt-1.5 flex items-start gap-1.5">
+                  <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                  <span>
+                    No surtible: {formatOtherStock(stockDetail, stockDetail.unit_of_measure)}.
+                  </span>
                 </p>
               )}
             </div>

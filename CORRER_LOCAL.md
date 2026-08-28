@@ -211,6 +211,14 @@ Columnas que necesita (reconoce los nombres de MB52 en inglés y español):
 | Almacén | `SLoc`, `Storage Location`, `LGORT`, `Almacén` |
 | Existencia | `Unrestricted`, `LABST`, `Libre utilización` |
 | Unidad | `Unit`, `Base Unit of Measure`, `MEINS`, `UMB` |
+| En tránsito | `Transit/Transf.`, `Tránsito`, `Traslado` |
+| En calidad | `In Quality Insp.`, `Control de calidad` |
+| Restringido | `Restricted-Use`, `Uso restringido` |
+| Bloqueado | `Blocked`, `Bloqueado` |
+| Devoluciones | `Returns`, `Devoluciones` |
+
+Las cinco últimas son opcionales: si tu export no las trae, todo lo demás
+funciona igual.
 
 Si tu export usa otros nombres, fíjalos en `docker-compose.yml` sin tocar código:
 ```yaml
@@ -219,9 +227,14 @@ SAP_COL_QTY: "Stock disponible"
 ```
 
 Detalles que ya están resueltos:
-- **Se toma el stock de libre utilización** (`Unrestricted`). Lo que está en
-  tránsito, en control de calidad, restringido o bloqueado **no** cuenta como
+- **Solo el stock de libre utilización** (`Unrestricted`) cuenta como
   disponible, que es el criterio correcto para lo que Producción puede pedir.
+  Lo que está en tránsito, en control de calidad, restringido, bloqueado o en
+  devoluciones **se guarda aparte y se muestra**, pero nunca se suma al
+  disponible: cuando una parte sale en cero, Producción ve *"hay 1,800 en
+  tránsito"* al elegirla, y Almacén lo ve al momento de surtir. La diferencia
+  importa — no es un quiebre de stock, es material por liberarse, y la
+  respuesta a Producción es distinta.
 - **Se suman los almacenes** de un mismo centro, y el desglose por almacén se
   guarda igual: Producción ve el total y Almacén ve *en qué almacén está* al
   momento de surtir.

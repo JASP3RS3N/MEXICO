@@ -33,8 +33,10 @@ import {
   clearDraft,
   elapsedMinutes,
   formatMinutes,
+  formatOtherStock,
   formatQty,
   isOpen,
+  otherStockTotal,
   loadDraft,
   saveDraft,
 } from "@/lib/wms";
@@ -253,7 +255,11 @@ export default function Solicitudes() {
                         <span className="font-mono text-sm text-textBright">{item.part_number}</span>
                         <span
                           className={`text-xs font-mono shrink-0 ${
-                            Number(item.available_quantity) > 0 ? "text-cyan" : "text-red-400"
+                            Number(item.available_quantity) > 0
+                              ? "text-cyan"
+                              : otherStockTotal(item) > 0
+                              ? "text-amber-300"
+                              : "text-red-400"
                           }`}
                         >
                           {formatQty(item.available_quantity, item.unit_of_measure)}
@@ -266,6 +272,11 @@ export default function Solicitudes() {
                           {item.storage_locations
                             .map((sl) => `${sl.code} (${formatQty(sl.quantity)})`)
                             .join(" · ")}
+                        </p>
+                      )}
+                      {otherStockTotal(item) > 0 && (
+                        <p className="text-[11px] text-amber-300/90 mt-0.5">
+                          + {formatOtherStock(item, item.unit_of_measure)}
                         </p>
                       )}
                     </button>
@@ -310,8 +321,16 @@ export default function Solicitudes() {
                     <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
                     <span>
                       SAP reporta{" "}
-                      <b>{formatQty(selectedPart.available_quantity, selectedPart.unit_of_measure)}</b> en esta
-                      locación, menos de lo que pides. Puedes enviarla igual: almacén decidirá si surte parcial.
+                      <b>{formatQty(selectedPart.available_quantity, selectedPart.unit_of_measure)}</b>{" "}
+                      disponible en esta locación, menos de lo que pides. Puedes enviarla igual: almacén
+                      decidirá si surte parcial.
+                      {otherStockTotal(selectedPart) > 0 && (
+                        <span className="block mt-1">
+                          Hay además{" "}
+                          <b>{formatOtherStock(selectedPart, selectedPart.unit_of_measure)}</b> — no se
+                          puede surtir todavía, pero existe.
+                        </span>
+                      )}
                     </span>
                   </span>
                 ) : (
@@ -324,6 +343,11 @@ export default function Solicitudes() {
                         {selectedPart.storage_locations
                           .map((sl) => `${sl.code} (${formatQty(sl.quantity)})`)
                           .join(" · ")}
+                      </span>
+                    )}
+                    {otherStockTotal(selectedPart) > 0 && (
+                      <span className="block text-xs text-amber-300 mt-1">
+                        Además hay {formatOtherStock(selectedPart, selectedPart.unit_of_measure)}.
                       </span>
                     )}
                   </span>

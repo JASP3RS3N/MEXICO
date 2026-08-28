@@ -103,6 +103,44 @@ export const formatQty = (value, unit) => {
 };
 
 // ---------------------------------------------------------------------------
+// Stock que existe pero no es surtible
+// ---------------------------------------------------------------------------
+// MB52 separa el inventario en categorías y solo "libre utilización" cuenta
+// como disponible. Las demás se muestran aparte: no se puede surtir con ellas,
+// pero saber que el material existe y está por liberarse cambia la decisión de
+// Producción (esperar) y la de Almacén (avisar en vez de reportar quiebre).
+export const OTHER_STOCK_LABELS = {
+  transit: "en tránsito",
+  quality_inspection: "en control de calidad",
+  restricted: "de uso restringido",
+  blocked: "bloqueado",
+  returns: "en devoluciones",
+};
+
+// Orden de presentación: primero lo que más probablemente se vuelva surtible.
+const OTHER_STOCK_ORDER = ["transit", "quality_inspection", "restricted", "blocked", "returns"];
+
+/** [{key, label, quantity}] con solo las categorías que traen algo. */
+export const otherStockEntries = (snapshot) => {
+  const other = snapshot?.other_stock;
+  if (!other) return [];
+  return OTHER_STOCK_ORDER.filter((key) => other[key]).map((key) => ({
+    key,
+    label: OTHER_STOCK_LABELS[key],
+    quantity: other[key],
+  }));
+};
+
+export const otherStockTotal = (snapshot) =>
+  otherStockEntries(snapshot).reduce((sum, entry) => sum + entry.quantity, 0);
+
+/** "1,800 en tránsito · 192 en control de calidad" */
+export const formatOtherStock = (snapshot, unit) =>
+  otherStockEntries(snapshot)
+    .map((entry) => `${formatQty(entry.quantity, unit)} ${entry.label}`)
+    .join(" · ");
+
+// ---------------------------------------------------------------------------
 // Borradores locales (modo offline-friendly)
 // ---------------------------------------------------------------------------
 // Si el backend se cae a media captura, lo que el operador escribió no se
