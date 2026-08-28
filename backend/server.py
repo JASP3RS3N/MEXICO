@@ -173,9 +173,9 @@ async def _seed_wms_location(tenant_id: str) -> dict:
     doc = {
         "id": gen_id(),
         "tenant_id": tenant_id,
-        "code": "1000/0001",
+        "code": "1000",
         "plant_code": "1000",
-        "name": "Planta 1000 · Almacén 0001",
+        "name": "Planta 1000",
         "active": True,
         "created_at": now_iso(),
         "source": "seed",

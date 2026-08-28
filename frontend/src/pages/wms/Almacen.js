@@ -188,6 +188,7 @@ export default function Almacen() {
   const [fulfillClose, setFulfillClose] = useState(true);
   const [releaseTarget, setReleaseTarget] = useState(null);
   const [releaseReason, setReleaseReason] = useState("");
+  const [stockDetail, setStockDetail] = useState(null);
 
   const lastSoundRef = useRef(0);
 
@@ -272,6 +273,12 @@ export default function Almacen() {
     setFulfillQty(String(request.quantity_pending || request.quantity_requested));
     setFulfillNotes("");
     setFulfillClose(true);
+    // Best-effort: si SAP no reporta la parte, el modal funciona igual.
+    setStockDetail(null);
+    api
+      .get(`/inventory/part/${request.location_id}/${encodeURIComponent(request.part_number)}`)
+      .then(({ data }) => setStockDetail(data))
+      .catch(() => {});
   };
 
   const confirmFulfill = async () => {
@@ -442,6 +449,16 @@ export default function Almacen() {
                 {fulfillTarget.quantity_fulfilled_total > 0 &&
                   ` · ya surtido ${formatQty(fulfillTarget.quantity_fulfilled_total, fulfillTarget.unit_of_measure)}`}
               </p>
+              {/* Dónde está el material según el último export de SAP: evita
+                  que el surtidor recorra el centro buscándolo. */}
+              {stockDetail?.storage_locations?.length > 0 && (
+                <p className="text-xs text-textDim mt-2">
+                  Según SAP está en:{" "}
+                  {stockDetail.storage_locations
+                    .map((sl) => `almacén ${sl.code} (${formatQty(sl.quantity)})`)
+                    .join(" · ")}
+                </p>
+              )}
             </div>
 
             <Field label="Cantidad entregada" hint="Puede ser menos de lo pedido (surtido parcial)">

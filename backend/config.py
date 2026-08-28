@@ -63,8 +63,12 @@ SAP_INVENTORY_SYNC_MINUTES = int(os.environ.get("SAP_INVENTORY_SYNC_MINUTES", "6
 # primero creado), que es el caso normal de una instalación en planta.
 SAP_INVENTORY_TENANT_SLUG = os.environ.get("SAP_INVENTORY_TENANT_SLUG", "").strip()
 # Cómo se arma la locación a partir del export: "plant" (solo centro/WERKS) o
-# "plant_sloc" (centro + almacén/LGORT, p. ej. "1000/0001").
-SAP_LOCATION_MODE = os.environ.get("SAP_LOCATION_MODE", "plant_sloc").strip().lower()
+# "plant_sloc" (centro + almacén/LGORT, p. ej. "2300/2301").
+# Por defecto "plant": el usuario se asigna a UNA locación, y con plant_sloc un
+# centro con decenas de almacenes se fragmentaría tanto que producción no vería
+# el material que está en el almacén de al lado. El desglose por almacén se
+# guarda igual dentro del snapshot (storage_locations), sin partir la locación.
+SAP_LOCATION_MODE = os.environ.get("SAP_LOCATION_MODE", "plant").strip().lower()
 # Mapeo de columnas del export. Vacío = autodetección por alias (ver
 # sap_inventory_ingest.COLUMN_ALIASES), que ya cubre MB52 en inglés y español.
 SAP_COL_PART_NUMBER = os.environ.get("SAP_COL_PART_NUMBER", "").strip()

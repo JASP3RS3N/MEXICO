@@ -178,22 +178,39 @@ Windows**) corre **MB52** y guarda el resultado en una carpeta.
 3. Levanta la app: `docker compose up -d --build`.
 
 ### Formato del archivo
-Se acepta lo que MB52 exporta normalmente:
-- **Texto** (`.txt` / `.csv`) separado por **tabulador**, `|` (lista ALV con
-  bordes), punto y coma o coma — el separador se detecta solo, igual que las
-  líneas de adorno (`---`) y el título que SAP pone antes del encabezado.
-- **`.xlsx`**.
+Se aceptan las **dos presentaciones** en que sale MB52; la app detecta sola cuál
+es y lo dice en la bitácora de sincronizaciones.
+
+**a) Bloques multilínea** — la que exporta el ALV de SAP con *Hoja de cálculo →
+Texto sin formato*. El encabezado ocupa tres renglones y cada material es un
+bloque separado por una línea en blanco:
+
+```
+	Material Number		Material Description		Plnt	Name 1
+	SLoc	SL	  Unrestricted		Unit	   Transit/Transf.	  In Quality Insp. …
+		   Total Value		Crcy	   Total Value …
+
+	001003000I		FLOAT ARM		2300	Gentherm Monterrey S.A.de C.V.
+	2301		          400		PC	            0 …
+		       398.00		USD	         0.00 …
+```
+
+Un mismo material puede traer **varios pares (cantidad, importe)**, uno por
+almacén; se suman. El renglón `* Total` del final se descarta.
+
+**b) Fila por registro** — CSV/TSV plano o lista ALV con bordes `|`, donde cada
+línea ya trae material, centro, almacén y cantidad.
 
 Columnas que necesita (reconoce los nombres de MB52 en inglés y español):
 
 | Campo | Alias que reconoce |
 |-------|--------------------|
-| Número de parte | `Material`, `MATNR`, `Número de parte` |
+| Número de parte | `Material Number`, `Material`, `MATNR`, `Número de parte` |
 | Descripción | `Material Description`, `MAKTX`, `Texto breve material` |
-| Centro / planta | `Plant`, `WERKS`, `Centro`, `Planta` |
-| Almacén | `Storage Location`, `LGORT`, `Almacén` |
+| Centro / planta | `Plnt`, `Plant`, `WERKS`, `Centro`, `Planta` |
+| Almacén | `SLoc`, `Storage Location`, `LGORT`, `Almacén` |
 | Existencia | `Unrestricted`, `LABST`, `Libre utilización` |
-| Unidad | `Base Unit of Measure`, `MEINS`, `UMB` |
+| Unidad | `Unit`, `Base Unit of Measure`, `MEINS`, `UMB` |
 
 Si tu export usa otros nombres, fíjalos en `docker-compose.yml` sin tocar código:
 ```yaml
@@ -202,13 +219,26 @@ SAP_COL_QTY: "Stock disponible"
 ```
 
 Detalles que ya están resueltos:
-- MB52 devuelve **una fila por material × centro × almacén × lote**; la app
-  **suma** el stock de libre utilización por parte y locación.
-- Las cantidades se interpretan mirando **todo el archivo** para decidir si el
-  decimal es coma o punto (así `10,000` se lee como 10, no como diez mil). Si
-  tu export resultara ambiguo, fíjalo con `SAP_DECIMAL_SEPARATOR: ","` o `"."`.
-- `SAP_LOCATION_MODE` decide si una locación es solo el centro (`plant`) o
-  centro + almacén (`plant_sloc`, el valor por defecto).
+- **Se toma el stock de libre utilización** (`Unrestricted`). Lo que está en
+  tránsito, en control de calidad, restringido o bloqueado **no** cuenta como
+  disponible, que es el criterio correcto para lo que Producción puede pedir.
+- **Se suman los almacenes** de un mismo centro, y el desglose por almacén se
+  guarda igual: Producción ve el total y Almacén ve *en qué almacén está* al
+  momento de surtir.
+- **Codificación**: los exports de SAP sobre Windows vienen en `cp1252`, no en
+  UTF-8. Se detecta sola, así que `GEHÄUSE` y `CONNECTOR 90°` se leen bien.
+- **Separador decimal**: se decide mirando el archivo completo —cantidades e
+  importes— en vez de valor por valor. Así `1,200` se lee como mil doscientos
+  en un export en inglés y `1.250,000` como mil doscientos cincuenta en uno en
+  español. Si tu archivo resultara ambiguo, fíjalo con
+  `SAP_DECIMAL_SEPARATOR: "."` o `","`.
+- **Cantidades negativas** (SAP las emite en algunos almacenes) se respetan tal
+  cual, no se recortan a cero.
+- `SAP_LOCATION_MODE` decide qué es una locación: `plant` (por defecto, un
+  centro = una locación) o `plant_sloc` (cada almacén es su propia locación).
+  Conviene dejarlo en `plant`: cada persona se asigna a **una** locación, y con
+  `plant_sloc` alguien asignado al almacén 2301 no vería el material que está en
+  el 2311 del mismo centro.
 
 ## 3. El scheduler (la sincronización automática)
 
@@ -308,7 +338,13 @@ asegúrate de que no la reescriba ni agregue un `X-Frame-Options: DENY`.
   carpeta correcta y que el script de SAP siga corriendo en el Task Scheduler.
 - **"No se reconocieron las columnas"** → tu export usa otros encabezados: llena
   las variables `SAP_COL_*` con los nombres exactos de tu archivo.
-- **Las cantidades salen ×1000** → fija `SAP_DECIMAL_SEPARATOR` con el separador
-  decimal real de tu export.
+- **Las cantidades salen ×1000 o ÷1000** → fija `SAP_DECIMAL_SEPARATOR` con el
+  separador decimal real de tu export (`"."` para `1,200.50`, `","` para
+  `1.200,50`).
+- **Producción no ve material que sí existe** → probablemente `SAP_LOCATION_MODE`
+  está en `plant_sloc` y la persona quedó asignada a un solo almacén del centro.
+  Cámbialo a `plant`.
+- **Las descripciones salen con `?` o símbolos raros** → el archivo viene en una
+  codificación que no se pudo detectar; mándamelo y agrego el caso.
 - **"Tu usuario no tiene una locación asignada"** → como dueño, edita al usuario
   en **Usuarios** y asígnale su planta.

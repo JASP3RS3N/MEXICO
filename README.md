@@ -74,7 +74,7 @@ yarn start
 cd backend
 pip install mongomock-motor httpx
 python smoke_test.py       # 43 verificaciones end-to-end (auth, POS, cocina, cobro, P&L)
-python wms_smoke_test.py   # 102 verificaciones del WMS (ingesta MB52, solicitudes, surtido, KPIs, Excel)
+python wms_smoke_test.py   # 125 verificaciones del WMS (ingesta MB52, solicitudes, surtido, KPIs, Excel)
 ```
 
 Más detalle de arquitectura en [`plan.md`](./plan.md).

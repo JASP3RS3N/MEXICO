@@ -49,7 +49,7 @@ services:
       SAP_INVENTORY_FILE_GLOB: "*.*"
       SAP_INVENTORY_SYNC_MINUTES: "60"
       SAP_INVENTORY_TENANT_SLUG: ""
-      SAP_LOCATION_MODE: plant_sloc
+      SAP_LOCATION_MODE: plant
       SAP_DECIMAL_SEPARATOR: auto
     extra_hosts:
       # Permite que el contenedor llegue a LM Studio corriendo en el host.

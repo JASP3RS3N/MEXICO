@@ -260,6 +260,14 @@ export default function Solicitudes() {
                         </span>
                       </div>
                       <p className="text-xs text-textDim truncate">{item.description}</p>
+                      {item.storage_locations?.length > 1 && (
+                        <p className="text-[11px] text-textDim mt-0.5">
+                          En {item.storage_locations.length} almacenes:{" "}
+                          {item.storage_locations
+                            .map((sl) => `${sl.code} (${formatQty(sl.quantity)})`)
+                            .join(" · ")}
+                        </p>
+                      )}
                     </button>
                   ))}
                 </div>
@@ -310,6 +318,14 @@ export default function Solicitudes() {
                   <span>
                     Disponible en SAP:{" "}
                     <b>{formatQty(selectedPart.available_quantity, selectedPart.unit_of_measure)}</b>
+                    {selectedPart.storage_locations?.length > 1 && (
+                      <span className="block text-xs opacity-90 mt-0.5">
+                        Repartido en:{" "}
+                        {selectedPart.storage_locations
+                          .map((sl) => `${sl.code} (${formatQty(sl.quantity)})`)
+                          .join(" · ")}
+                      </span>
+                    )}
                   </span>
                 )}
               </div>
