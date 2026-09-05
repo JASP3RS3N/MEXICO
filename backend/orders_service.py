@@ -7,7 +7,7 @@ from config import db, gen_id, now_iso, tenant_query
 from alerts import maybe_low_stock_alert, maybe_low_stock_alert_product
 
 
-async def settle_order(order: dict, method: str, amount_received, actor: dict):
+async def settle_order(order: dict, method: str, amount_received, actor: dict, tip_amount: float = 0.0):
     """Deduct materials per each item's recipe (BOM), record COGS, mark the order paid.
 
     Returns (updated_order, change). Assumes the order is unpaid and not cancelled.
@@ -54,8 +54,12 @@ async def settle_order(order: dict, method: str, amount_received, actor: dict):
             )
             await maybe_low_stock_alert_product(item["product_id"])
 
-    amount = amount_received if amount_received is not None else order["total"]
-    change = round(max(float(amount) - float(order["total"]), 0), 2)
+    # The tip (propina) is extra money on top of the order total, so it's added to
+    # what's due before computing change.
+    tip = max(0.0, float(tip_amount or 0))
+    total_due = round(float(order["total"]) + tip, 2)
+    amount = amount_received if amount_received is not None else total_due
+    change = round(max(float(amount) - total_due, 0), 2)
 
     # NOTE: payment is independent from the kitchen/fulfillment status. We do NOT
     # move the order to a "paid" status, so a paid order keeps flowing through the
@@ -63,6 +67,7 @@ async def settle_order(order: dict, method: str, amount_received, actor: dict):
     updates = {
         "paid": True,
         "payment_method": method,
+        "tip_amount": tip,
         "amount_received": float(amount),
         "change": change,
         "cogs": round(cogs, 2),

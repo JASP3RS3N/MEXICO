@@ -119,6 +119,28 @@ with client:  # triggers startup (seed)
     check("change computed", r.json()["change"] == round(1000 - order["total"], 2))
     check("cannot double-pay", client.post(f"/api/orders/{order['id']}/pay", headers=cashier, json={"method": "efectivo"}).status_code == 400)
 
+    # propina (tip): el cambio se calcula sobre total + propina
+    r = client.post("/api/orders", headers=cashier, json={"items": [{"product_id": refresco["id"], "qty": 1}]})
+    check("cashier creates second order (tip test)", r.status_code == 200)
+    tip_order = r.json()
+    tip_amount = round(tip_order["total"] * 0.1, 2) or 5.0
+    r = client.post(f"/api/orders/{tip_order['id']}/pay", headers=cashier, json={"method": "efectivo", "amount_received": 1000, "tip_amount": tip_amount})
+    check("cashier pays order with tip", r.status_code == 200)
+    check("change accounts for tip", r.json()["change"] == round(1000 - (tip_order["total"] + tip_amount), 2))
+    got = client.get(f"/api/orders/{tip_order['id']}", headers=owner).json()
+    check("order stores tip_amount", got.get("tip_amount") == tip_amount)
+
+    # corrección de método de pago en orden ya cobrada (solo el método; con auditoría)
+    r = client.post(f"/api/orders/{order['id']}/correct-payment-method", headers=cashier, json={"method": "tarjeta"})
+    check("cashier corrects payment method on paid order", r.status_code == 200)
+    corrected = r.json()
+    check("payment method updated", corrected["payment_method"] == "tarjeta")
+    check("audit keeps original method", corrected.get("original_payment_method") == "efectivo")
+    check("audit records who/when", bool(corrected.get("payment_corrected_by_user_id")) and bool(corrected.get("payment_corrected_at")))
+    check("correction does not change totals", corrected["total"] == order["total"] and corrected["amount_received"] == 1000.0)
+    check("order stays paid (not reopened)", corrected.get("paid") is True)
+    check("prep cannot correct payment method (403)", client.post(f"/api/orders/{order['id']}/correct-payment-method", headers=prep, json={"method": "efectivo"}).status_code == 403)
+
     mats_after = {m["id"]: m["current_stock"] for m in client.get("/api/materials", headers=owner).json()}
     brisket_mat = next(m["material_id"] for m in brisket["recipe"] if True)
     check("inventory deducted after payment", mats_after[brisket_mat] < mat_before[brisket_mat])

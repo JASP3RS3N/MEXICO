@@ -16,7 +16,7 @@ from config import (
     now_iso,
     tenant_query,
 )
-from models import SALES_CHANNELS, OrderCreate, PaymentRequest, PinTagRequest
+from models import SALES_CHANNELS, OrderCreate, PaymentMethodUpdate, PaymentRequest, PinTagRequest
 from security import get_current_user, get_tenant_id, require_pin_session, require_roles
 from orders_service import settle_order
 
@@ -24,6 +24,7 @@ router = APIRouter()
 
 ACTIVE_STATUSES = [ORDER_PENDING, ORDER_PREPARING, ORDER_READY, ORDER_DELIVERED]
 KITCHEN_STATUSES = [ORDER_PENDING, ORDER_PREPARING, ORDER_READY]
+PAYMENT_METHODS = {"efectivo", "tarjeta", "transferencia"}
 
 
 async def _get_settings(tenant_id: str) -> dict:
@@ -327,5 +328,45 @@ async def pay_order(order_id: str, payload: PaymentRequest, user: dict = Depends
     if order["status"] == ORDER_CANCELLED:
         raise HTTPException(status_code=400, detail="La orden está cancelada")
 
-    fresh, change = await settle_order(order, payload.method, payload.amount_received, user)
+    if payload.tip_amount < 0:
+        raise HTTPException(status_code=422, detail="tip_amount no puede ser negativo")
+
+    fresh, change = await settle_order(order, payload.method, payload.amount_received, user, tip_amount=payload.tip_amount)
     return {"order": fresh, "change": change}
+
+
+@router.post("/orders/{order_id}/correct-payment-method")
+async def correct_payment_method(
+    order_id: str,
+    payload: PaymentMethodUpdate,
+    user: dict = Depends(require_roles("cashier", "owner")),
+):
+    """Corrige el método de pago de una orden ya cobrada (el cajero se equivocó al cobrar).
+
+    Solo cambia ``payment_method``; nunca toca totales ni reabre la orden.
+    Registra auditoría: quién hizo el cambio, cuándo y cuál era el método original.
+    """
+    tenant_id = get_tenant_id(user)
+    order = await db.orders.find_one(tenant_query(tenant_id, {"id": order_id}))
+    if not order:
+        raise HTTPException(status_code=404, detail="Orden no encontrada")
+    if not order.get("paid"):
+        raise HTTPException(status_code=400, detail="La orden aún no ha sido cobrada")
+    if payload.method not in PAYMENT_METHODS:
+        raise HTTPException(
+            status_code=422,
+            detail="Método de pago inválido (usa efectivo, tarjeta o transferencia)",
+        )
+
+    updates = {
+        "payment_method": payload.method,
+        # Auditoría: quién y cuándo corrigió el método.
+        "payment_corrected_by_user_id": user["id"],
+        "payment_corrected_by_name": user.get("name", ""),
+        "payment_corrected_at": now_iso(),
+    }
+    # Conserva el método original solo la primera vez (auditoría estable ante correcciones repetidas).
+    if not order.get("original_payment_method"):
+        updates["original_payment_method"] = order.get("payment_method")
+    await db.orders.update_one(tenant_query(tenant_id, {"id": order_id}), {"$set": updates})
+    return await db.orders.find_one(tenant_query(tenant_id, {"id": order_id}), {"_id": 0})
