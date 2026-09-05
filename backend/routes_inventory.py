@@ -606,6 +606,11 @@ async def update_po_status(po_id: str, payload: POStatusUpdate, user: dict = Dep
         updates["items"] = received_items
         updates["received_at"] = now_iso()
         updates["received_by"] = user["id"]
+        # Control #4 — persist who physically delivered and why quantities
+        # deviated (the frontend already enforces both before sending). Free-text
+        # on purpose: the delivery may come from a different supplier than the PO's.
+        updates["physical_supplier"] = payload.physical_supplier or ""
+        updates["variance_reason"] = payload.variance_reason or ""
 
     await db.purchase_orders.update_one(tenant_query(tenant_id, {"id": po_id}), {"$set": updates})
     return await db.purchase_orders.find_one(tenant_query(tenant_id, {"id": po_id}), {"_id": 0})

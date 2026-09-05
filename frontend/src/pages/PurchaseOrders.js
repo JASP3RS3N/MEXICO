@@ -199,6 +199,9 @@ export default function PurchaseOrders() {
           material_id: it.material_id,
           received_qty: Number(it.received_qty || 0),
         })),
+        // Control #4: persist who delivered + why quantities deviated.
+        physical_supplier: physicalSupplier.trim(),
+        variance_reason: varianceReason.trim(),
       });
       toast.success("Recibida · inventario actualizado");
       setReceiveModal(null);
@@ -242,6 +245,8 @@ export default function PurchaseOrders() {
           {pos.map((po) => {
             const meta = PO_STATUS[po.status] || { label: po.status, color: "gray" };
             const isOpen = expanded === po.id;
+            // Control #4: received POs carry per-item received qty + variance.
+            const isReceived = po.status === "received";
             return (
               <Card key={po.id}>
                 <div className="p-4 flex items-center gap-3 cursor-pointer" onClick={() => setExpanded(isOpen ? null : po.id)}>
@@ -265,6 +270,7 @@ export default function PurchaseOrders() {
                         <tr className="text-left text-textDim">
                           <th className="py-1 font-medium">Insumo</th>
                           <th className="py-1 font-medium text-right">Cantidad</th>
+                          {isReceived && <th className="py-1 font-medium text-right">Recibido</th>}
                           <th className="py-1 font-medium text-right">Costo unit.</th>
                           <th className="py-1 font-medium text-right">Subtotal</th>
                         </tr>
@@ -274,6 +280,11 @@ export default function PurchaseOrders() {
                           <tr key={i} className="text-textMain">
                             <td className="py-1">{it.name}</td>
                             <td className="py-1 text-right font-mono">{num(it.qty, 2)} {it.unit}</td>
+                            {isReceived && (
+                              <td className={`py-1 text-right font-mono ${Math.abs(Number(it.variance_pct || 0)) > RECEIVING_VARIANCE_TOLERANCE_PCT ? "text-red-400" : Number(it.received_qty ?? it.qty) !== Number(it.qty) ? "text-amber-400" : ""}`}>
+                                {it.received_qty != null ? `${num(it.received_qty, 2)} ${it.unit} (${fmtVariance(Number(it.variance_pct || 0))})` : "—"}
+                              </td>
+                            )}
                             <td className="py-1 text-right font-mono">{money(it.unit_cost, currency)}</td>
                             <td className="py-1 text-right font-mono">{money(it.subtotal, currency)}</td>
                           </tr>
@@ -281,6 +292,22 @@ export default function PurchaseOrders() {
                       </tbody>
                     </table>
                     {po.notes && <p className="text-xs text-textDim italic mb-3">Nota: {po.notes}</p>}
+                    {/* Control #4: persisted receiving audit — who delivered + why quantities deviated */}
+                    {isReceived && (
+                      <div className="mb-3 space-y-1 text-xs">
+                        <p>
+                          <span className="text-textDim">Recibida:</span>{" "}
+                          {fmtDate(po.received_at)} · <span className="text-textDim">Entregó físicamente:</span>{" "}
+                          {po.physical_supplier || "—"}
+                          {po.physical_supplier && po.supplier && po.physical_supplier !== po.supplier && (
+                            <span className="text-amber-400"> ⚠ distinto al proveedor de la orden ({po.supplier})</span>
+                          )}
+                        </p>
+                        {po.variance_reason && (
+                          <p><span className="text-textDim">Motivo de variación:</span> {po.variance_reason}</p>
+                        )}
+                      </div>
+                    )}
                     <div className="flex flex-wrap gap-2 justify-end">
                       {po.status === "draft" && <Btn size="sm" variant="secondary" onClick={() => setStatus(po.id, "ordered")}>Marcar ordenada</Btn>}
                       {(po.status === "draft" || po.status === "ordered") && (
