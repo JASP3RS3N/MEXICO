@@ -327,5 +327,8 @@ async def pay_order(order_id: str, payload: PaymentRequest, user: dict = Depends
     if order["status"] == ORDER_CANCELLED:
         raise HTTPException(status_code=400, detail="La orden está cancelada")
 
-    fresh, change = await settle_order(order, payload.method, payload.amount_received, user)
+    if payload.tip_amount < 0:
+        raise HTTPException(status_code=422, detail="tip_amount no puede ser negativo")
+
+    fresh, change = await settle_order(order, payload.method, payload.amount_received, user, tip_amount=payload.tip_amount)
     return {"order": fresh, "change": change}

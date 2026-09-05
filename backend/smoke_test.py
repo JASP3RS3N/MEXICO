@@ -119,6 +119,17 @@ with client:  # triggers startup (seed)
     check("change computed", r.json()["change"] == round(1000 - order["total"], 2))
     check("cannot double-pay", client.post(f"/api/orders/{order['id']}/pay", headers=cashier, json={"method": "efectivo"}).status_code == 400)
 
+    # propina (tip): el cambio se calcula sobre total + propina
+    r = client.post("/api/orders", headers=cashier, json={"items": [{"product_id": refresco["id"], "qty": 1}]})
+    check("cashier creates second order (tip test)", r.status_code == 200)
+    tip_order = r.json()
+    tip_amount = round(tip_order["total"] * 0.1, 2) or 5.0
+    r = client.post(f"/api/orders/{tip_order['id']}/pay", headers=cashier, json={"method": "efectivo", "amount_received": 1000, "tip_amount": tip_amount})
+    check("cashier pays order with tip", r.status_code == 200)
+    check("change accounts for tip", r.json()["change"] == round(1000 - (tip_order["total"] + tip_amount), 2))
+    got = client.get(f"/api/orders/{tip_order['id']}", headers=owner).json()
+    check("order stores tip_amount", got.get("tip_amount") == tip_amount)
+
     mats_after = {m["id"]: m["current_stock"] for m in client.get("/api/materials", headers=owner).json()}
     brisket_mat = next(m["material_id"] for m in brisket["recipe"] if True)
     check("inventory deducted after payment", mats_after[brisket_mat] < mat_before[brisket_mat])

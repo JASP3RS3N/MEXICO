@@ -34,6 +34,7 @@ export default function POS() {
   const [payOrder, setPayOrder] = useState(null);
   const [method, setMethod] = useState("efectivo");
   const [received, setReceived] = useState("");
+  const [tip, setTip] = useState("");
   const [paying, setPaying] = useState(false);
 
   useEffect(() => {
@@ -139,6 +140,7 @@ export default function POS() {
       const { data } = await api.post("/orders", buildPayload());
       setPayOrder(data);
       setReceived("");
+      setTip("");
       setMethod("efectivo");
       setPayOpen(true);
     } catch (err) {
@@ -148,20 +150,22 @@ export default function POS() {
     }
   };
 
+  const tipNum = tip !== "" ? Math.max(0, Number(tip) || 0) : 0;
+  const totalDue = (payOrder?.total || 0) + tipNum;
   const change =
     method === "efectivo" && received !== ""
-      ? Math.max(0, Number(received) - (payOrder?.total || 0))
+      ? Math.max(0, Number(received) - totalDue)
       : 0;
 
   const confirmPayment = async () => {
     if (!payOrder) return;
     setPaying(true);
     try {
-      const body = { method };
+      const body = { method, tip_amount: tipNum };
       if (method === "efectivo" && received !== "") body.amount_received = Number(received);
       const { data } = await api.post(`/orders/${payOrder.id}/pay`, body);
       toast.success(
-        `Cobrado ${money(payOrder.total, settings.currency)}` +
+        `Cobrado ${money(totalDue, settings.currency)}` +
           (data.change ? ` · Cambio ${money(data.change, settings.currency)}` : "")
       );
       setPayOpen(false);
@@ -362,8 +366,11 @@ export default function POS() {
           <div className="text-center py-2">
             <p className="text-textDim text-sm">Total a cobrar</p>
             <p className="text-4xl font-black font-mono text-money">
-              {money(payOrder?.total || 0, settings.currency)}
+              {money(totalDue, settings.currency)}
             </p>
+            {tipNum > 0 && (
+              <p className="text-xs text-textDim mt-1">Incluye propina de {money(tipNum, settings.currency)}</p>
+            )}
           </div>
 
           <div>
@@ -386,6 +393,9 @@ export default function POS() {
             </div>
           </div>
 
+          <Field label="Propina">
+            <Input type="number" inputMode="decimal" value={tip} onChange={(e) => setTip(e.target.value)} placeholder="0.00" />
+          </Field>
           {method === "efectivo" && (
             <Field label="Efectivo recibido">
               <Input
@@ -393,7 +403,7 @@ export default function POS() {
                 inputMode="decimal"
                 value={received}
                 onChange={(e) => setReceived(e.target.value)}
-                placeholder={String(payOrder?.total || "")}
+                placeholder={String(totalDue)}
               />
               {received !== "" && (
                 <div className="flex justify-between mt-2 text-sm">

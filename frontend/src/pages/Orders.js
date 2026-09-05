@@ -69,6 +69,7 @@ export default function Orders() {
   const [payOrder, setPayOrder] = useState(null);
   const [method, setMethod] = useState("efectivo");
   const [received, setReceived] = useState("");
+  const [tip, setTip] = useState("");
   const [paying, setPaying] = useState(false);
 
   const load = useCallback(async () => {
@@ -113,15 +114,18 @@ export default function Orders() {
     setPayOrder(o);
     setMethod("efectivo");
     setReceived("");
+    setTip("");
   };
 
-  const change = method === "efectivo" && received !== "" ? Math.max(0, Number(received) - (payOrder?.total || 0)) : 0;
+  const tipNum = tip !== "" ? Math.max(0, Number(tip) || 0) : 0;
+  const totalDue = (payOrder?.total || 0) + tipNum;
+  const change = method === "efectivo" && received !== "" ? Math.max(0, Number(received) - totalDue) : 0;
 
   const confirmPay = async () => {
     if (!payOrder) return;
     setPaying(true);
     try {
-      const body = { method };
+      const body = { method, tip_amount: tipNum };
       if (method === "efectivo" && received !== "") body.amount_received = Number(received);
       const { data } = await api.post(`/orders/${payOrder.id}/pay`, body);
       toast.success(`Cobrado${data.change ? ` · Cambio ${money(data.change, currency)}` : ""}`);
@@ -260,7 +264,10 @@ export default function Orders() {
         <div className="space-y-4">
           <div className="text-center py-2">
             <p className="text-textDim text-sm">Total a cobrar</p>
-            <p className="text-4xl font-black font-mono text-money">{money(payOrder?.total || 0, currency)}</p>
+            <p className="text-4xl font-black font-mono text-money">{money(totalDue, currency)}</p>
+            {tipNum > 0 && (
+              <p className="text-xs text-textDim mt-1">Incluye propina de {money(tipNum, currency)}</p>
+            )}
           </div>
           <div className="grid grid-cols-3 gap-2">
             {METHODS.map((m) => (
@@ -278,9 +285,12 @@ export default function Orders() {
               </button>
             ))}
           </div>
+          <Field label="Propina">
+            <Input type="number" value={tip} onChange={(e) => setTip(e.target.value)} placeholder="0.00" />
+          </Field>
           {method === "efectivo" && (
             <Field label="Efectivo recibido">
-              <Input type="number" value={received} onChange={(e) => setReceived(e.target.value)} placeholder={String(payOrder?.total || "")} />
+              <Input type="number" value={received} onChange={(e) => setReceived(e.target.value)} placeholder={String(totalDue)} />
               {received !== "" && (
                 <div className="flex justify-between mt-2 text-sm">
                   <span className="text-textMain">Cambio</span>
