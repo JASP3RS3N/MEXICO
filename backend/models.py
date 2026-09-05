@@ -235,6 +235,10 @@ class PaymentRequest(BaseModel):
     tip_amount: float = 0.0  # propina (>= 0)
 
 
+class PaymentMethodUpdate(BaseModel):
+    method: str  # efectivo | tarjeta | transferencia — solo el método, nunca totales
+
+
 # ---------------------------------------------------------------------------
 # Purchase orders (órdenes de compra)
 # ---------------------------------------------------------------------------
