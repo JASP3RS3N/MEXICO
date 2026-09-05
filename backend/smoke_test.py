@@ -141,6 +141,30 @@ with client:  # triggers startup (seed)
     check("order stays paid (not reopened)", corrected.get("paid") is True)
     check("prep cannot correct payment method (403)", client.post(f"/api/orders/{order['id']}/correct-payment-method", headers=prep, json={"method": "efectivo"}).status_code == 403)
 
+    # número de personas en mesa ya abierta (#32) — solo cashier/owner, con auditoría
+    r = client.post("/api/orders", headers=cashier, json={
+        "customer_name": "Mesa 7",
+        "table": "7",
+        "party_size": 2,
+        "items": [{"product_id": refresco["id"], "qty": 1}],
+    })
+    check("cashier creates table order with party size", r.status_code == 200 and r.json().get("party_size") == 2)
+    table_order = r.json()
+
+    r = client.post(f"/api/orders/{table_order['id']}/party-size", headers=cashier, json={"party_size": 5})
+    check("cashier changes party size on open table", r.status_code == 200 and r.json().get("party_size") == 5)
+    check("party size audit records who/when", bool(r.json().get("party_size_changed_by_user_id")) and bool(r.json().get("party_size_changed_at")))
+
+    check("owner can change party size", client.post(f"/api/orders/{table_order['id']}/party-size", headers=owner, json={"party_size": 4}).status_code == 200)
+    check("prep cannot change party size (403)", client.post(f"/api/orders/{table_order['id']}/party-size", headers=prep, json={"party_size": 6}).status_code == 403)
+    check("zero party size rejected (422)", client.post(f"/api/orders/{table_order['id']}/party-size", headers=cashier, json={"party_size": 0}).status_code == 422)
+
+    r = client.post("/api/orders", headers=cashier, json={"items": [{"product_id": refresco["id"], "qty": 1}]})
+    check("order without table rejects party-size (400)", client.post(f"/api/orders/{r.json()['id']}/party-size", headers=cashier, json={"party_size": 3}).status_code == 400)
+
+    # orden ya cobrada → no se puede cambiar el número de personas
+    check("paid order rejects party-size (400)", client.post(f"/api/orders/{order['id']}/party-size", headers=cashier, json={"party_size": 9}).status_code == 400)
+
     mats_after = {m["id"]: m["current_stock"] for m in client.get("/api/materials", headers=owner).json()}
     brisket_mat = next(m["material_id"] for m in brisket["recipe"] if True)
     check("inventory deducted after payment", mats_after[brisket_mat] < mat_before[brisket_mat])

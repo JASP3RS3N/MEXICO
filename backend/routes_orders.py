@@ -16,7 +16,7 @@ from config import (
     now_iso,
     tenant_query,
 )
-from models import SALES_CHANNELS, OrderCreate, PaymentMethodUpdate, PaymentRequest, PinTagRequest
+from models import SALES_CHANNELS, OrderCreate, PartySizeUpdate, PaymentMethodUpdate, PaymentRequest, PinTagRequest
 from security import get_current_user, get_tenant_id, require_pin_session, require_roles
 from orders_service import settle_order
 
@@ -124,6 +124,7 @@ async def create_order(payload: OrderCreate, user: dict = Depends(require_roles(
         "order_number": seq,
         "customer_name": (payload.customer_name or "").strip(),
         "table": (payload.table or "").strip(),
+        "party_size": payload.party_size,
         "order_type": payload.order_type or "comer_aqui",
         "notes": payload.notes or "",
         "sales_channel_code": channel_code,
@@ -368,5 +369,38 @@ async def correct_payment_method(
     # Conserva el método original solo la primera vez (auditoría estable ante correcciones repetidas).
     if not order.get("original_payment_method"):
         updates["original_payment_method"] = order.get("payment_method")
+    await db.orders.update_one(tenant_query(tenant_id, {"id": order_id}), {"$set": updates})
+    return await db.orders.find_one(tenant_query(tenant_id, {"id": order_id}), {"_id": 0})
+
+
+@router.post("/orders/{order_id}/party-size")
+async def update_party_size(
+    order_id: str,
+    payload: PartySizeUpdate,
+    user: dict = Depends(require_roles("cashier", "owner")),
+):
+    """Cambia el número de personas de una mesa ya abierta (orden sin cobrar).
+
+    Solo toca ``party_size``; nunca totales ni estado. Registra auditoría:
+    quién hizo el cambio y cuándo.
+    """
+    tenant_id = get_tenant_id(user)
+    order = await db.orders.find_one(tenant_query(tenant_id, {"id": order_id}))
+    if not order:
+        raise HTTPException(status_code=404, detail="Orden no encontrada")
+    if order.get("paid"):
+        raise HTTPException(status_code=400, detail="La orden ya fue cobrada")
+    if order["status"] == ORDER_CANCELLED:
+        raise HTTPException(status_code=400, detail="La orden está cancelada")
+    if not (order.get("table") or "").strip():
+        raise HTTPException(status_code=400, detail="La orden no tiene mesa asignada")
+
+    updates = {
+        "party_size": payload.party_size,
+        # Auditoría: quién y cuándo cambió el número de personas.
+        "party_size_changed_by_user_id": user["id"],
+        "party_size_changed_by_name": user.get("name", ""),
+        "party_size_changed_at": now_iso(),
+    }
     await db.orders.update_one(tenant_query(tenant_id, {"id": order_id}), {"$set": updates})
     return await db.orders.find_one(tenant_query(tenant_id, {"id": order_id}), {"_id": 0})

@@ -213,6 +213,7 @@ class OrderCreate(BaseModel):
     items: List[OrderItemInput]
     customer_name: Optional[str] = ""
     table: Optional[str] = ""
+    party_size: Optional[int] = Field(None, ge=1)  # número de personas (mesas)
     order_type: str = "comer_aqui"  # comer_aqui | para_llevar
     notes: Optional[str] = ""
     sales_channel_code: str = "counter"  # code from SALES_CHANNELS: counter, phone, uber_eats, rappi, didi_food
@@ -237,6 +238,10 @@ class PaymentRequest(BaseModel):
 
 class PaymentMethodUpdate(BaseModel):
     method: str  # efectivo | tarjeta | transferencia — solo el método, nunca totales
+
+
+class PartySizeUpdate(BaseModel):
+    party_size: int = Field(..., ge=1)  # >= 1 persona; pydantic devuelve 422 si no
 
 
 # ---------------------------------------------------------------------------
