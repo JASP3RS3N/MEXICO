@@ -247,7 +247,23 @@ with client:  # triggers startup (seed)
     check("unsupported type rejected (400)", client.post("/api/cash-movements", headers=cashier, json={"type": "deposit", "reason": "x"}).status_code == 400)
 
     log = client.get("/api/cash-movements", headers=cashier).json()
-    check("audit log lists both opens", len(log) >= 2 and all(m["type"] == "drawer_open" for m in log))
+    opens = [m for m in log if m["type"] == "drawer_open"]
+    check("audit log lists both opens", len(opens) >= 2)
+
+    print("\n== Cash auto-deposit on payment (#30) ==")
+    moves = client.get("/api/cash-movements", headers=cashier).json()
+    dep1 = next((m for m in moves if m["type"] == "deposit" and m.get("order_id") == order["id"]), None)
+    check("cash payment created auto deposit", dep1 is not None)
+    check("deposit amount equals total due", dep1["amount"] == round(order["total"], 2))
+    check("deposit reason references the order", f"#{order['order_number']}" in dep1["reason"])
+    dep_tip = next((m for m in moves if m["type"] == "deposit" and m.get("order_id") == tip_order["id"]), None)
+    check("tip deposit includes tip amount", dep_tip is not None and dep_tip["amount"] == round(tip_order["total"] + tip_amount, 2))
+
+    r = client.post("/api/orders", headers=cashier, json={"items": [{"product_id": refresco["id"], "qty": 1}]})
+    card_order = r.json()
+    check("card order paid", client.post(f"/api/orders/{card_order['id']}/pay", headers=cashier, json={"method": "tarjeta"}).status_code == 200)
+    moves2 = client.get("/api/cash-movements", headers=cashier).json()
+    check("card payment creates no cash movement", not any(m["type"] == "deposit" and m.get("order_id") == card_order["id"] for m in moves2))
 
 print(f"\n==== RESULT: {PASS} passed, {FAIL} failed ====")
 raise SystemExit(1 if FAIL else 0)
