@@ -202,5 +202,28 @@ with client:  # triggers startup (seed)
     dash = client.get("/api/finance/dashboard", headers=owner).json()
     check("dashboard today block", "today" in dash and "month" in dash)
 
+    print("\n== Cash movements / drawer open (#29) ==")
+    tid = client.get("/api/auth/me", headers=owner).json()["user"]["tenant_id"]
+    r = client.post("/api/cash-movements", headers=cashier, json={"type": "drawer_open", "reason": "Apertura de caja turno mañana"})
+    check("cashier opens drawer (audited)", r.status_code == 200)
+    mv = r.json()
+    check("movement scoped to tenant", mv["tenant_id"] == tid)
+    check("movement type is drawer_open", mv["type"] == "drawer_open")
+    check("movement stores reason", mv["reason"] == "Apertura de caja turno mañana")
+    check("movement records creator id", bool(mv.get("created_by_user_id")))
+    check("movement records creator name", bool(mv.get("created_by_name")))
+    check("movement has timestamp", bool(mv.get("created_at")))
+
+    r = client.post("/api/cash-movements", headers=owner, json={"type": "drawer_open", "reason": "Apertura por dueño"})
+    check("owner opens drawer (audited)", r.status_code == 200)
+
+    check("prep cannot open drawer (403)", client.post("/api/cash-movements", headers=prep, json={"type": "drawer_open", "reason": "x"}).status_code == 403)
+    check("missing reason rejected (400)", client.post("/api/cash-movements", headers=cashier, json={"type": "drawer_open"}).status_code == 400)
+    check("blank reason rejected (400)", client.post("/api/cash-movements", headers=cashier, json={"type": "drawer_open", "reason": "   "}).status_code == 400)
+    check("unsupported type rejected (400)", client.post("/api/cash-movements", headers=cashier, json={"type": "deposit", "reason": "x"}).status_code == 400)
+
+    log = client.get("/api/cash-movements", headers=cashier).json()
+    check("audit log lists both opens", len(log) >= 2 and all(m["type"] == "drawer_open" for m in log))
+
 print(f"\n==== RESULT: {PASS} passed, {FAIL} failed ====")
 raise SystemExit(1 if FAIL else 0)

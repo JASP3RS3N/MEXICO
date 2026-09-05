@@ -317,6 +317,18 @@ class SettingsUpdate(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Cash movements (movimientos de caja con auditoría) — #29
+# ---------------------------------------------------------------------------
+class CashMovementCreate(BaseModel):
+    type: str  # hoy solo "drawer_open"; otros tipos se rechazan en la ruta
+    reason: Optional[str] = None  # motivo obligatorio; validado en la ruta (400 si vacío)
+
+
+# Tipos de movimiento soportados. Se amplía cuando lleguen depósitos/retiros.
+CASH_MOVEMENT_TYPES = {"drawer_open"}
+
+
+# ---------------------------------------------------------------------------
 # Suppliers (proveedores)
 # ---------------------------------------------------------------------------
 def _normalize_rfc(value: Optional[str]) -> Optional[str]:

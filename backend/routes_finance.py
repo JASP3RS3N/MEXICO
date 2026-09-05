@@ -2,12 +2,12 @@
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from config import ORDER_PAID, clean, db, gen_id, now, now_iso, tenant_query
 from crypto_utils import encrypt_value
-from models import ExpenseCreate, SettingsUpdate
-from security import get_current_user, get_tenant_id, require_owner
+from models import CashMovementCreate, CASH_MOVEMENT_TYPES, ExpenseCreate, SettingsUpdate
+from security import get_current_user, get_tenant_id, require_owner, require_roles
 
 router = APIRouter()
 
@@ -404,3 +404,47 @@ async def update_settings(payload: SettingsUpdate, user: dict = Depends(require_
     )
     fresh = await db.settings.find_one(tenant_query(tenant_id, {"id": "settings"}), {"_id": 0})
     return _scrub_fiscal_config(fresh)
+
+
+# ---------------------------------------------------------------------------
+# Caja: movimientos manuales auditados (#29 apertura manual de caja)
+# ---------------------------------------------------------------------------
+require_cash_or_owner = require_roles("cashier", "owner")
+
+
+@router.post("/cash-movements")
+async def create_cash_movement(
+    payload: CashMovementCreate, user: dict = Depends(require_cash_or_owner)
+):
+    """Audited manual drawer open (apertura manual de caja).
+
+    Only cashier and owner may move the cash box. Every movement is stored
+    with who did it and why, so the audit trail lives in ``cash_movements``.
+    """
+    if payload.type not in CASH_MOVEMENT_TYPES:
+        raise HTTPException(status_code=400, detail=f"Tipo de movimiento no soportado: {payload.type}")
+    reason = (payload.reason or "").strip()
+    if not reason:
+        raise HTTPException(status_code=400, detail="El motivo es obligatorio")
+    tid = get_tenant_id(user)
+    doc = {
+        "id": gen_id(),
+        "tenant_id": tid,
+        "type": payload.type,
+        "reason": reason,
+        "created_by_user_id": user["id"],
+        "created_by_name": user.get("name") or user.get("username"),
+        "created_at": now_iso(),
+    }
+    await db.cash_movements.insert_one(doc)
+    return clean(doc)
+
+
+@router.get("/cash-movements")
+async def list_cash_movements(
+    limit: int = Query(100, le=500), user: dict = Depends(require_cash_or_owner)
+):
+    """Audit log of manual cash movements for the tenant (newest first)."""
+    tid = get_tenant_id(user)
+    docs = await db.cash_movements.find(tenant_query(tid)).sort("created_at", -1).to_list(max(1, limit))
+    return [clean(d) for d in docs]
