@@ -260,6 +260,11 @@ class POStatusUpdate(BaseModel):
     # Only used when status == "received": the actual quantity received per
     # item, which may differ from the quantity originally ordered.
     received_items: Optional[List[POReceiveItem]] = None
+    # Control #4 — only used when status == "received": who physically delivered
+    # (may differ from po["supplier"]) and why quantities deviated. Persisted on
+    # the PO document for audit; free-text, not validated against suppliers.
+    physical_supplier: Optional[str] = ""
+    variance_reason: Optional[str] = ""
 
 
 # ---------------------------------------------------------------------------

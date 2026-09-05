@@ -88,3 +88,7 @@ credentials.json
 *.pem
 *.key
 .credentials
+
+# Debug temp files and firecrawl output
+thor-debug*.txt
+firecrawl/

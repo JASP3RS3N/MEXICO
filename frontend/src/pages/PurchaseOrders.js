@@ -15,6 +15,9 @@ const PO_STATUS = {
 
 const emptyPO = { supplier: "", notes: "", items: [] };
 
+// Control #3: maximum allowed variance between ordered and received qty (%).
+const RECEIVING_VARIANCE_TOLERANCE_PCT = 10;
+
 export default function PurchaseOrders() {
   const [pos, setPos] = useState([]);
   const [materials, setMaterials] = useState([]);
@@ -23,6 +26,10 @@ export default function PurchaseOrders() {
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState(null);
   const [receiveModal, setReceiveModal] = useState(null);
+  // Control #2: who physically delivered the goods (cross-checked vs PO supplier).
+  const [physicalSupplier, setPhysicalSupplier] = useState("");
+  // Control #3: mandatory reason when variance exceeds tolerance.
+  const [varianceReason, setVarianceReason] = useState("");
   const [saving, setSaving] = useState(false);
   const [expanded, setExpanded] = useState(null);
 
@@ -125,10 +132,15 @@ export default function PurchaseOrders() {
   };
 
   // Receiving captures the actual quantity per item (may differ from ordered).
-  const openReceive = (po) =>
+  const openReceive = (po) => {
+    // Control #2: prefill with the PO's supplier; user must confirm who delivered.
+    setPhysicalSupplier(po.supplier || "");
+    // Control #3: reason starts empty each time a receiving modal opens.
+    setVarianceReason("");
     setReceiveModal({
       po_id: po.id,
       po_number: po.po_number,
+      po_supplier: po.supplier || "",
       items: po.items.map((it) => ({
         material_id: it.material_id,
         name: it.name,
@@ -137,6 +149,30 @@ export default function PurchaseOrders() {
         received_qty: String(it.qty),
       })),
     });
+  };
+
+  // Control #3: absolute variance % between received and ordered qty for one item.
+  const itemVariancePct = (it) => {
+    const ordered = Number(it.ordered_qty || 0);
+    if (!ordered) return 0;
+    return (Math.abs(Number(it.received_qty || 0) - ordered) / ordered) * 100;
+  };
+
+  // Control #3: items whose variance exceeds the tolerance (drives UI + validation).
+  const overToleranceItems = receiveModal
+    ? receiveModal.items.filter((it) => itemVariancePct(it) > RECEIVING_VARIANCE_TOLERANCE_PCT)
+    : [];
+
+  // Signed, human-readable variance for the receiving table ("+5.0%" / "-12.3%").
+  const fmtVariance = (pct) => `${pct >= 0 ? "+" : ""}${Number(pct).toFixed(1)}%`;
+
+  // Control #2: options for "who physically delivered" — the PO's supplier first, then the rest.
+  const receiveSupplierOptions = (() => {
+    if (!receiveModal) return [];
+    const names = [...new Set(suppliers.map((s) => s.name).filter(Boolean))];
+    if (receiveModal.po_supplier && !names.includes(receiveModal.po_supplier)) names.unshift(receiveModal.po_supplier);
+    return names;
+  })();
 
   const setReceivedQty = (i, val) =>
     setReceiveModal((rm) => ({
@@ -145,6 +181,16 @@ export default function PurchaseOrders() {
     }));
 
   const confirmReceive = async () => {
+    // Control #2: physical supplier must be confirmed before receiving.
+    if (!physicalSupplier.trim()) {
+      toast.error("Indica quién entregó físicamente la mercancía");
+      return;
+    }
+    // Control #3: variance beyond tolerance requires a mandatory reason.
+    if (overToleranceItems.length > 0 && !varianceReason.trim()) {
+      toast.error(`Indica el motivo de la variación mayor al ${RECEIVING_VARIANCE_TOLERANCE_PCT}%`);
+      return;
+    }
     setSaving(true);
     try {
       await api.put(`/purchase-orders/${receiveModal.po_id}/status`, {
@@ -153,6 +199,9 @@ export default function PurchaseOrders() {
           material_id: it.material_id,
           received_qty: Number(it.received_qty || 0),
         })),
+        // Control #4: persist who delivered + why quantities deviated.
+        physical_supplier: physicalSupplier.trim(),
+        variance_reason: varianceReason.trim(),
       });
       toast.success("Recibida · inventario actualizado");
       setReceiveModal(null);
@@ -196,6 +245,8 @@ export default function PurchaseOrders() {
           {pos.map((po) => {
             const meta = PO_STATUS[po.status] || { label: po.status, color: "gray" };
             const isOpen = expanded === po.id;
+            // Control #4: received POs carry per-item received qty + variance.
+            const isReceived = po.status === "received";
             return (
               <Card key={po.id}>
                 <div className="p-4 flex items-center gap-3 cursor-pointer" onClick={() => setExpanded(isOpen ? null : po.id)}>
@@ -219,6 +270,7 @@ export default function PurchaseOrders() {
                         <tr className="text-left text-textDim">
                           <th className="py-1 font-medium">Insumo</th>
                           <th className="py-1 font-medium text-right">Cantidad</th>
+                          {isReceived && <th className="py-1 font-medium text-right">Recibido</th>}
                           <th className="py-1 font-medium text-right">Costo unit.</th>
                           <th className="py-1 font-medium text-right">Subtotal</th>
                         </tr>
@@ -228,6 +280,11 @@ export default function PurchaseOrders() {
                           <tr key={i} className="text-textMain">
                             <td className="py-1">{it.name}</td>
                             <td className="py-1 text-right font-mono">{num(it.qty, 2)} {it.unit}</td>
+                            {isReceived && (
+                              <td className={`py-1 text-right font-mono ${Math.abs(Number(it.variance_pct || 0)) > RECEIVING_VARIANCE_TOLERANCE_PCT ? "text-red-400" : Number(it.received_qty ?? it.qty) !== Number(it.qty) ? "text-amber-400" : ""}`}>
+                                {it.received_qty != null ? `${num(it.received_qty, 2)} ${it.unit} (${fmtVariance(Number(it.variance_pct || 0))})` : "—"}
+                              </td>
+                            )}
                             <td className="py-1 text-right font-mono">{money(it.unit_cost, currency)}</td>
                             <td className="py-1 text-right font-mono">{money(it.subtotal, currency)}</td>
                           </tr>
@@ -235,6 +292,22 @@ export default function PurchaseOrders() {
                       </tbody>
                     </table>
                     {po.notes && <p className="text-xs text-textDim italic mb-3">Nota: {po.notes}</p>}
+                    {/* Control #4: persisted receiving audit — who delivered + why quantities deviated */}
+                    {isReceived && (
+                      <div className="mb-3 space-y-1 text-xs">
+                        <p>
+                          <span className="text-textDim">Recibida:</span>{" "}
+                          {fmtDate(po.received_at)} · <span className="text-textDim">Entregó físicamente:</span>{" "}
+                          {po.physical_supplier || "—"}
+                          {po.physical_supplier && po.supplier && po.physical_supplier !== po.supplier && (
+                            <span className="text-amber-400"> ⚠ distinto al proveedor de la orden ({po.supplier})</span>
+                          )}
+                        </p>
+                        {po.variance_reason && (
+                          <p><span className="text-textDim">Motivo de variación:</span> {po.variance_reason}</p>
+                        )}
+                      </div>
+                    )}
                     <div className="flex flex-wrap gap-2 justify-end">
                       {po.status === "draft" && <Btn size="sm" variant="secondary" onClick={() => setStatus(po.id, "ordered")}>Marcar ordenada</Btn>}
                       {(po.status === "draft" || po.status === "ordered") && (
@@ -317,17 +390,33 @@ export default function PurchaseOrders() {
             <p className="text-xs text-textDim">
               Captura la cantidad realmente recibida por insumo. Puede diferir de lo pedido.
             </p>
+            {/* Control #2: confirm who physically delivered the goods */}
+            <Field label="Proveedor que entregó físicamente">
+              <Select value={physicalSupplier} onChange={(e) => setPhysicalSupplier(e.target.value)}>
+                {receiveSupplierOptions.map((name) => (
+                  <option key={name} value={name}>{name}</option>
+                ))}
+              </Select>
+            </Field>
+            {physicalSupplier && receiveModal.po_supplier && physicalSupplier !== receiveModal.po_supplier && (
+              <p className="text-xs text-amber-400">
+                ⚠ La mercancía la entregó un proveedor distinto al de la orden ({receiveModal.po_supplier}).
+              </p>
+            )}
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-left text-textDim">
                   <th className="py-1 font-medium">Insumo</th>
                   <th className="py-1 font-medium text-right">Pedido</th>
                   <th className="py-1 font-medium text-right">Recibido</th>
+                  <th className="py-1 font-medium text-right">Var.</th>
                 </tr>
               </thead>
               <tbody>
                 {receiveModal.items.map((it, i) => {
+                  const pct = itemVariancePct(it);
                   const diff = Number(it.received_qty || 0) !== Number(it.ordered_qty);
+                  const over = pct > RECEIVING_VARIANCE_TOLERANCE_PCT;
                   return (
                     <tr key={it.material_id} className="text-textMain">
                       <td className="py-1">{it.name}</td>
@@ -338,16 +427,31 @@ export default function PurchaseOrders() {
                           step="0.001"
                           value={it.received_qty}
                           onChange={(e) => setReceivedQty(i, e.target.value)}
-                          className={`w-24 text-right font-mono ${diff ? "text-amber-400 border-amber-500/50" : ""}`}
+                          className={`w-24 text-right font-mono ${over ? "text-red-400 border-red-500/60" : diff ? "text-amber-400 border-amber-500/50" : ""}`}
                         />
+                      </td>
+                      <td className={`py-1 text-right font-mono ${over ? "text-red-400" : diff ? "text-amber-400" : "text-textDim"}`}>
+                        {fmtVariance(pct)}
                       </td>
                     </tr>
                   );
                 })}
               </tbody>
             </table>
-            <p className="text-xs text-amber-400/80">
-              Los renglones en ámbar tienen una cantidad recibida distinta a la pedida.
+            {/* Control #3: mandatory reason when any item exceeds the tolerance */}
+            {overToleranceItems.length > 0 && (
+              <Field label={`Motivo de la variación mayor al ${RECEIVING_VARIANCE_TOLERANCE_PCT}% (obligatorio)`}>
+                <Textarea
+                  value={varianceReason}
+                  onChange={(e) => setVarianceReason(e.target.value)}
+                  placeholder="Ej. el proveedor solo tenía 90 kg disponibles; faltante a reordenar…"
+                />
+              </Field>
+            )}
+            <p className={`text-xs ${overToleranceItems.length > 0 ? "text-red-400/80" : "text-amber-400/80"}`}>
+              {overToleranceItems.length > 0
+                ? `Renglones en rojo: variación mayor al ${RECEIVING_VARIANCE_TOLERANCE_PCT}% (se requiere el motivo). Renglones en ámbar: diferencia dentro de la tolerancia.`
+                : "Los renglones en ámbar tienen una cantidad recibida distinta a la pedida (dentro de la tolerancia)."}
             </p>
           </div>
         )}

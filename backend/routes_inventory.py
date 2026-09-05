@@ -9,6 +9,7 @@ from config import (
     PO_DRAFT,
     PO_ORDERED,
     PO_RECEIVED,
+    RECEIVING_VARIANCE_TOLERANCE_PCT,
     clean,
     db,
     gen_id,
@@ -210,6 +211,39 @@ async def _offering_with_supplier_name(offering: dict, tenant_id: str) -> dict:
     return {**offering, "supplier_name": supplier["name"] if supplier else ""}
 
 
+async def _get_active_offerings(material_id: str, tenant_id: str) -> list:
+    """Active supplier offerings for a material, cheapest first. Internal
+    helper shared by GET /materials/{id}/offerings and the reorder
+    suggestions endpoint below — same query, same shape, no duplication."""
+    offerings = await db.supplier_offerings.find(
+        tenant_query(tenant_id, {"material_id": material_id, "active": True}), {"_id": 0}
+    ).sort("cost_per_unit", 1).to_list(500)
+    return [await _offering_with_supplier_name(o, tenant_id) for o in offerings]
+
+
+# Business rule (owner-facing, not just a technical default) — change this
+# threshold here if the tradeoff needs adjusting later: when suggesting a
+# reorder, we default to the cheapest supplier offering, EXCEPT when another
+# offering is at least this many days faster than the cheapest one. In that
+# case we recommend the faster offering instead — an urgent reorder (the
+# material is already at/below its minimum) shouldn't sit waiting several
+# extra days just to save a few pesos.
+REORDER_LEAD_TIME_PRIORITY_DAYS = 3
+
+
+def _pick_best_offering(offerings: list):
+    """Recommended supplier offering for a reorder suggestion, or None if the
+    material has no active offerings registered yet. See
+    REORDER_LEAD_TIME_PRIORITY_DAYS above for the cheapest-vs-fastest rule."""
+    if not offerings:
+        return None
+    cheapest = min(offerings, key=lambda o: o["cost_per_unit"])
+    fastest = min(offerings, key=lambda o: o["lead_time_days"])
+    if cheapest["lead_time_days"] - fastest["lead_time_days"] >= REORDER_LEAD_TIME_PRIORITY_DAYS:
+        return fastest
+    return cheapest
+
+
 @router.post("/supplier-offerings")
 async def create_supplier_offering(payload: SupplierOfferingCreate, user: dict = Depends(require_owner)):
     tenant_id = get_tenant_id(user)
@@ -290,16 +324,13 @@ async def delete_supplier_offering(offering_id: str, user: dict = Depends(requir
 @router.get("/materials/{material_id}/offerings")
 async def material_offerings(material_id: str, user: dict = Depends(require_owner)):
     """Active supplier offerings for a material, cheapest first — the data
-    the next feature will use to suggest which supplier to buy from when
-    generating a purchase order."""
+    used to suggest which supplier to buy from when generating a purchase
+    order (see po_suggestions below)."""
     tenant_id = get_tenant_id(user)
     material = await db.materials.find_one(tenant_query(tenant_id, {"id": material_id}))
     if not material:
         raise HTTPException(status_code=404, detail="Materia prima no encontrada")
-    offerings = await db.supplier_offerings.find(
-        tenant_query(tenant_id, {"material_id": material_id, "active": True}), {"_id": 0}
-    ).sort("cost_per_unit", 1).to_list(500)
-    return [await _offering_with_supplier_name(o, tenant_id) for o in offerings]
+    return await _get_active_offerings(material_id, tenant_id)
 
 
 # ---------------------------------------------------------------------------
@@ -314,7 +345,9 @@ async def list_pos(user: dict = Depends(require_owner)):
 
 @router.get("/purchase-orders/suggestions")
 async def po_suggestions(user: dict = Depends(require_owner)):
-    """Suggest reorder quantities for materials at/below their minimum stock."""
+    """Suggest reorder quantities for materials at/below their minimum stock,
+    each with a recommended supplier offering (see _pick_best_offering) plus
+    the full list of alternatives so the owner can pick a different one."""
     tenant_id = get_tenant_id(user)
     materials = await db.materials.find(tenant_query(tenant_id, {"active": True}), {"_id": 0}).to_list(2000)
     suggestions = []
@@ -328,17 +361,27 @@ async def po_suggestions(user: dict = Depends(require_owner)):
             # Round up to the nearest multiple of the minimum order quantity.
             if moq > 0:
                 suggested = math.ceil(suggested / moq) * moq
+
+            # Recommend a supplier from this material's registered offerings
+            # (see REORDER_LEAD_TIME_PRIORITY_DAYS for the cheapest-vs-fastest
+            # rule) — never fails or skips the material when none exist yet,
+            # just flags it so the owner knows to go configure one.
+            offerings = await _get_active_offerings(m["id"], tenant_id)
+            best_offering = _pick_best_offering(offerings)
+
             suggestions.append(
                 {
                     "material_id": m["id"],
                     "name": m["name"],
                     "unit": m["unit"],
-                    "supplier": m.get("supplier", ""),
                     "current_stock": current,
                     "min_stock": minimum,
                     "min_order": moq,
                     "suggested_qty": round(suggested, 2),
                     "unit_cost": float(m.get("cost_per_unit", 0)),
+                    "suggested_supplier": best_offering,
+                    "no_offerings": best_offering is None,
+                    "supplier_offerings": offerings,
                 }
             )
     return suggestions
@@ -532,6 +575,27 @@ async def update_po_status(po_id: str, payload: POStatusUpdate, user: dict = Dep
         # ordered; fall back to the ordered qty when not provided (back-compat).
         # No MOQ validation on receiving — the supplier may send any amount.
         received_map = {ri.material_id: float(ri.received_qty) for ri in (payload.received_items or [])}
+
+        # Control #5 — validaciones obligatorias server-side al recibir (espejo
+        # de las reglas del frontend en PurchaseOrders.js). Se ejecutan ANTES de
+        # cualquier mutación de stock para que una recepción rechazada no deje efectos.
+        if not (payload.physical_supplier or "").strip():
+            raise HTTPException(status_code=422, detail="physical_supplier es requerido al recibir una orden de compra")
+
+        variance_reason = (payload.variance_reason or "").strip()
+        exceeds_tolerance = False
+        for item in po["items"]:
+            ordered_qty = float(item["qty"])
+            if ordered_qty <= 0:
+                continue
+            actual_qty = received_map.get(item["material_id"], ordered_qty)
+            variance_pct = abs(actual_qty - ordered_qty) / ordered_qty * 100
+            if variance_pct > RECEIVING_VARIANCE_TOLERANCE_PCT:
+                exceeds_tolerance = True
+                break
+        if exceeds_tolerance and not variance_reason:
+            raise HTTPException(status_code=422, detail="variance_reason es requerido cuando la cantidad recibida excede el 10% de tolerancia")
+
         received_items = []
         for item in po["items"]:
             actual_qty = received_map.get(item["material_id"], float(item["qty"]))
@@ -564,6 +628,11 @@ async def update_po_status(po_id: str, payload: POStatusUpdate, user: dict = Dep
         updates["items"] = received_items
         updates["received_at"] = now_iso()
         updates["received_by"] = user["id"]
+        # Control #4 — persist who physically delivered and why quantities
+        # deviated (the frontend already enforces both before sending). Free-text
+        # on purpose: the delivery may come from a different supplier than the PO's.
+        updates["physical_supplier"] = payload.physical_supplier or ""
+        updates["variance_reason"] = payload.variance_reason or ""
 
     await db.purchase_orders.update_one(tenant_query(tenant_id, {"id": po_id}), {"$set": updates})
     return await db.purchase_orders.find_one(tenant_query(tenant_id, {"id": po_id}), {"_id": 0})

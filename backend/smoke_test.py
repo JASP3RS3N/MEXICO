@@ -134,8 +134,31 @@ with client:  # triggers startup (seed)
     check("PO numbered", po["po_number"].startswith("OC-"))
     check("PO total", po["total"] == 1000.0)
     stock_before_po = next(m["current_stock"] for m in client.get("/api/materials", headers=owner).json() if m["id"] == low_mat["id"])
+    # Control #5 — validaciones server-side al recibir (casos negativos). La PO
+    # debe estar "ordered" para que el PUT recibido llegue a las nuevas reglas.
+    neg_po = client.post("/api/purchase-orders", headers=owner, json={
+        "supplier": "Proveedor X",
+        "items": [{"material_id": low_mat["id"], "qty": 10, "unit_cost": 100}],
+    }).json()
+    check("neg PO marked ordered", client.put(f"/api/purchase-orders/{neg_po['id']}/status", headers=owner, json={"status": "ordered"}).status_code == 200)
+    check("receive without physical_supplier rejected (422)", client.put(f"/api/purchase-orders/{neg_po['id']}/status", headers=owner, json={"status": "received"}).status_code == 422)
+
+    neg_po2 = client.post("/api/purchase-orders", headers=owner, json={
+        "supplier": "Proveedor X",
+        "items": [{"material_id": low_mat["id"], "qty": 10, "unit_cost": 100}],
+    }).json()
+    check("neg PO2 marked ordered", client.put(f"/api/purchase-orders/{neg_po2['id']}/status", headers=owner, json={"status": "ordered"}).status_code == 200)
+    check(">10% variance without reason rejected (422)", client.put(
+        f"/api/purchase-orders/{neg_po2['id']}/status", headers=owner,
+        json={
+            "status": "received",
+            "physical_supplier": "Proveedor X",
+            "received_items": [{"material_id": low_mat["id"], "received_qty": 5}],
+        },
+    ).status_code == 422)
+
     check("PO marked ordered", client.put(f"/api/purchase-orders/{po['id']}/status", headers=owner, json={"status": "ordered"}).status_code == 200)
-    check("receiving PO adds stock", client.put(f"/api/purchase-orders/{po['id']}/status", headers=owner, json={"status": "received"}).status_code == 200)
+    check("receiving PO adds stock", client.put(f"/api/purchase-orders/{po['id']}/status", headers=owner, json={"status": "received", "physical_supplier": "Proveedor X"}).status_code == 200)
     stock_after_po = next(m["current_stock"] for m in client.get("/api/materials", headers=owner).json() if m["id"] == low_mat["id"])
     check("stock increased by received qty", stock_after_po == stock_before_po + 10)
     check("cannot re-receive PO", client.put(f"/api/purchase-orders/{po['id']}/status", headers=owner, json={"status": "received"}).status_code == 400)
