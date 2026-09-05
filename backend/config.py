@@ -86,6 +86,7 @@ PO_DRAFT = "draft"
 PO_ORDERED = "ordered"
 PO_RECEIVED = "received"
 PO_CANCELLED = "cancelled"
+RECEIVING_VARIANCE_TOLERANCE_PCT = 10   # Control #5: tolerancia de variación al recibir (%, espejo del frontend)
 
 
 # ---------------------------------------------------------------------------

@@ -9,6 +9,7 @@ from config import (
     PO_DRAFT,
     PO_ORDERED,
     PO_RECEIVED,
+    RECEIVING_VARIANCE_TOLERANCE_PCT,
     clean,
     db,
     gen_id,
@@ -574,6 +575,27 @@ async def update_po_status(po_id: str, payload: POStatusUpdate, user: dict = Dep
         # ordered; fall back to the ordered qty when not provided (back-compat).
         # No MOQ validation on receiving — the supplier may send any amount.
         received_map = {ri.material_id: float(ri.received_qty) for ri in (payload.received_items or [])}
+
+        # Control #5 — validaciones obligatorias server-side al recibir (espejo
+        # de las reglas del frontend en PurchaseOrders.js). Se ejecutan ANTES de
+        # cualquier mutación de stock para que una recepción rechazada no deje efectos.
+        if not (payload.physical_supplier or "").strip():
+            raise HTTPException(status_code=422, detail="physical_supplier es requerido al recibir una orden de compra")
+
+        variance_reason = (payload.variance_reason or "").strip()
+        exceeds_tolerance = False
+        for item in po["items"]:
+            ordered_qty = float(item["qty"])
+            if ordered_qty <= 0:
+                continue
+            actual_qty = received_map.get(item["material_id"], ordered_qty)
+            variance_pct = abs(actual_qty - ordered_qty) / ordered_qty * 100
+            if variance_pct > RECEIVING_VARIANCE_TOLERANCE_PCT:
+                exceeds_tolerance = True
+                break
+        if exceeds_tolerance and not variance_reason:
+            raise HTTPException(status_code=422, detail="variance_reason es requerido cuando la cantidad recibida excede el 10% de tolerancia")
+
         received_items = []
         for item in po["items"]:
             actual_qty = received_map.get(item["material_id"], float(item["qty"]))
