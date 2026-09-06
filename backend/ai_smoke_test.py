@@ -19,7 +19,7 @@ motor.motor_asyncio.AsyncIOMotorClient = mongomock_motor.AsyncMongoMockClient
 from fastapi.testclient import TestClient  # noqa: E402
 import server  # noqa: E402
 from ai_tools import execute_tool  # noqa: E402
-from config import db  # noqa: E402
+from config import db, now_iso  # noqa: E402
 
 client = TestClient(server.app)
 PASS, FAIL = 0, 0
@@ -37,13 +37,27 @@ def check(label, cond):
 
 def auth(u, p):
     r = client.post("/api/auth/login", json={"username": u, "password": p})
+    assert r.status_code == 200, f"login {u} -> {r.status_code} {r.text}"
+    return {"Authorization": f"Bearer {r.json()['token']}"}
+
+
+def auth_pin(owner_headers, username):
+    """Cashier/prep log in by PIN (see commit 0c81b7e); mirrors smoke_test.py."""
+    users = client.get("/api/users", headers=owner_headers).json()
+    target = next(u for u in users if u["username"] == username)
+    r = client.post(f"/api/users/{target['id']}/regenerate-pin", headers=owner_headers)
+    assert r.status_code == 200, f"regenerate-pin {username} -> {r.status_code} {r.text}"
+    pin = r.json()["pin"]
+    r = client.post("/api/auth/login-pin", headers=owner_headers, json={"pin": pin})
+    assert r.status_code == 200, f"login-pin {username} -> {r.status_code} {r.text}"
     return {"Authorization": f"Bearer {r.json()['token']}"}
 
 
 with client:  # startup seeds data
     owner_headers = auth("dueno", "dueno123")
-    cashier_headers = auth("caja", "caja123")
-    owner = asyncio.get_event_loop().run_until_complete(db.users.find_one({"username": "dueno"}, {"_id": 0}))
+    cashier_headers = auth_pin(owner_headers, "caja")
+    loop = asyncio.new_event_loop()
+    owner = loop.run_until_complete(db.users.find_one({"username": "dueno"}, {"_id": 0}))
 
     print("\n== Access control ==")
     check("cashier blocked from /ai/status (403)", client.get("/api/ai/status", headers=cashier_headers).status_code == 403)
@@ -61,8 +75,19 @@ with client:  # startup seeds data
     check("recipe-suggestions POST 503 when LM Studio down", client.post("/api/ai/recipe-suggestions", headers=owner_headers).status_code == 503)
     check("recipe-suggestions owner-only", client.get("/api/ai/recipe-suggestions", headers=cashier_headers).status_code == 403)
 
+    print("\n== Supplier price comparison (#18) ==")
+    base_mat_ai = loop.run_until_complete(
+        db.materials.find_one({"tenant_id": owner["tenant_id"], "cost_per_unit": {"$gt": 0}}, {"_id": 0}))
+    loop.run_until_complete(db.supplier_offerings.insert_one({
+        "id": "off-18-ai", "tenant_id": owner["tenant_id"], "supplier_id": "sup-18-ai",
+        "material_id": base_mat_ai["id"], "cost_per_unit": 9.99, "min_order": 5.0,
+        "lead_time_days": 3, "last_price_update": "2026-09-01", "active": True,
+        "created_at": now_iso(), "updated_at": now_iso(),
+    }))
+    check("supplier-price-comparison cashier blocked (403)", client.post("/api/ai/supplier-price-comparison", headers=cashier_headers).status_code == 403)
+    check("supplier-price-comparison POST 503 when LM Studio down", client.post("/api/ai/supplier-price-comparison", headers=owner_headers).status_code == 503)
+
     print("\n== Tool executor (read) ==")
-    loop = asyncio.get_event_loop()
 
     def run(name, args):
         return loop.run_until_complete(execute_tool(name, args, owner))

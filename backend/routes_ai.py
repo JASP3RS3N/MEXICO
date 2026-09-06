@@ -391,3 +391,55 @@ async def price_suggestions(user: dict = Depends(require_owner)):
     except httpx.RequestError as exc:
         raise HTTPException(status_code=503, detail=f"No se pudo conectar a LM Studio ({LMSTUDIO_BASE_URL}). Detalle: {exc}")
     return {"content": content.strip()}
+
+
+# ---------------------------------------------------------------------------
+# Supplier price comparison report (on-demand, owner) - #18
+# ---------------------------------------------------------------------------
+COMPARE_SYSTEM = (
+    "Eres analista de compras de un restaurante smokehouse. Compara las ofertas activas de los "
+    "proveedores frente al costo actual de cada insumo y explica las variaciones en español, "
+    "claro y conciso, con cifras concretas."
+)
+
+
+@router.post("/ai/supplier-price-comparison")
+async def supplier_price_comparison(user: dict = Depends(require_owner)):
+    if not AI_ENABLED:
+        raise HTTPException(status_code=503, detail="La IA está deshabilitada.")
+    tenant_id = get_tenant_id(user)
+
+    materials = await db.materials.find(tenant_query(tenant_id), {"_id": 0}).to_list(2000)
+    offerings = await db.supplier_offerings.find(tenant_query(tenant_id, {"active": True}), {"_id": 0}).to_list(2000)
+    if not offerings:
+        raise HTTPException(status_code=400, detail="No hay ofertas activas de proveedores para comparar.")
+
+    suppliers = {s["id"]: s.get("name", "Proveedor desconocido") for s in await db.suppliers.find(tenant_query(tenant_id), {"_id": 0}).to_list(500)}
+    materials_by_id = {m["id"]: m for m in materials}
+
+    lines = []
+    for off in offerings:
+        mat = materials_by_id.get(off.get("material_id"))
+        if not mat:
+            continue
+        supplier_name = suppliers.get(off.get("supplier_id"), "Proveedor desconocido")
+        lines.append(
+            f"- {mat['name']}: costo actual {mat.get('cost_per_unit', 0)} | oferta de {supplier_name} a "
+            f"{off.get('cost_per_unit', 0)} (última actualización: {off.get('last_price_update') or 's/d'})"
+        )
+    if not lines:
+        raise HTTPException(status_code=400, detail="No hay ofertas activas de proveedores para comparar.")
+
+    prompt = (
+        "Comparación entre las ofertas activas de los proveedores y el costo actual de cada insumo:\n" + "\n".join(lines) +
+        "\n\nResume en español, en texto plano: qué insumos subieron o bajaron de precio respecto a su costo actual, "
+        "con el porcentaje aproximado de variación, y cuáles se mantuvieron. Solo informa; no sugieras cambios ni modifiques datos."
+    )
+    messages = [{"role": "system", "content": COMPARE_SYSTEM}, {"role": "user", "content": prompt}]
+    try:
+        content = await _plain_completion(messages)
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(status_code=502, detail=f"LM Studio respondió con error: {exc.response.status_code}")
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=503, detail=f"No se pudo conectar a LM Studio ({LMSTUDIO_BASE_URL}). Detalle: {exc}")
+    return {"content": content.strip()}

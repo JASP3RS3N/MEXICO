@@ -5,6 +5,9 @@ through FastAPI's TestClient: seeding, auth, RBAC, POS order, kitchen flow,
 payment + inventory deduction, purchase orders and P&L.
 Run: python3 smoke_test.py
 """
+import asyncio
+import json
+
 import mongomock_motor
 import motor.motor_asyncio
 
@@ -13,6 +16,8 @@ motor.motor_asyncio.AsyncIOMotorClient = mongomock_motor.AsyncMongoMockClient
 
 from fastapi.testclient import TestClient  # noqa: E402
 import server  # noqa: E402
+from config import db, now_iso  # noqa: E402
+import routes_ai  # noqa: E402
 
 from io import BytesIO  # noqa: E402
 
@@ -419,6 +424,47 @@ with client:  # triggers startup (seed)
     check("card order paid", client.post(f"/api/orders/{card_order['id']}/pay", headers=cashier, json={"method": "tarjeta"}).status_code == 200)
     moves2 = client.get("/api/cash-movements", headers=cashier).json()
     check("card payment creates no cash movement", not any(m["type"] == "deposit" and m.get("order_id") == card_order["id"] for m in moves2))
+
+    print("\n== AI supplier price comparison (#18) ==")
+    # Enable the AI flag and stub the LLM call so this suite stays offline:
+    # we test access control, report shape and read-only behavior, not the model.
+    routes_ai.AI_ENABLED = True
+    captured_prompts = []
+
+    async def _fake_completion(messages):
+        captured_prompts.append(messages)
+        return "Resumen de precios: 1 insumo subió y 1 bajó respecto al costo actual."
+
+    routes_ai._plain_completion = _fake_completion
+
+    tid18 = client.get("/api/auth/me", headers=owner).json()["user"]["tenant_id"]
+    mats18 = client.get("/api/materials", headers=owner).json()
+    base_mat = next(m for m in mats18 if (m.get("cost_per_unit") or 0) > 0)
+    costs_before = {m["id"]: m.get("cost_per_unit") for m in mats18}
+
+    loop18 = asyncio.new_event_loop()
+    base_cost = float(base_mat["cost_per_unit"])
+    fixtures = (("sup-18-a", "Proveedor Norte", round(base_cost * 1.10, 4)), ("sup-18-b", "Proveedor Sur", round(base_cost * 0.95, 4)))
+    for sup_id, sup_name, price in fixtures:
+        loop18.run_until_complete(db.suppliers.insert_one({"id": sup_id, "tenant_id": tid18, "name": sup_name}))
+        loop18.run_until_complete(db.supplier_offerings.insert_one({
+            "id": f"off-18-{sup_id}", "tenant_id": tid18, "supplier_id": sup_id,
+            "material_id": base_mat["id"], "cost_per_unit": price, "min_order": 5.0,
+            "lead_time_days": 3, "last_price_update": "2026-09-01", "active": True,
+            "created_at": now_iso(), "updated_at": now_iso(),
+        }))
+
+    r = client.post("/api/ai/supplier-price-comparison", headers=owner)
+    check("owner gets plain-text comparison report", r.status_code == 200 and isinstance(r.json().get("content"), str) and len(r.json()["content"]) > 10)
+    prompt_text = json.dumps(captured_prompts, ensure_ascii=False) if captured_prompts else ""
+    check("prompt carries material + supplier data", base_mat["name"] in prompt_text and "Proveedor Norte" in prompt_text and "Proveedor Sur" in prompt_text)
+    check("cashier blocked from comparison (403)", client.post("/api/ai/supplier-price-comparison", headers=cashier).status_code == 403)
+
+    costs_after = {m["id"]: m.get("cost_per_unit") for m in client.get("/api/materials", headers=owner).json()}
+    check("report is read-only: material costs unchanged", costs_before == costs_after)
+
+    loop18.run_until_complete(db.supplier_offerings.update_many({"tenant_id": tid18, "active": True}, {"$set": {"active": False}}))
+    check("no active offerings -> 400", client.post("/api/ai/supplier-price-comparison", headers=owner).status_code == 400)
 
 print(f"\n==== RESULT: {PASS} passed, {FAIL} failed ====")
 raise SystemExit(1 if FAIL else 0)
