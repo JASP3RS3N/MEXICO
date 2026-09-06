@@ -526,16 +526,22 @@ require_cash_or_owner = require_roles("cashier", "owner")
 async def create_cash_movement(
     payload: CashMovementCreate, user: dict = Depends(require_cash_or_owner)
 ):
-    """Audited manual drawer open (apertura manual de caja).
+    """Audited manual cash movements (apertura de caja, depósitos y retiros).
 
     Only cashier and owner may move the cash box. Every movement is stored
     with who did it and why, so the audit trail lives in ``cash_movements``.
+    Deposits and withdrawals require a positive amount; drawer_open does not.
     """
     if payload.type not in CASH_MOVEMENT_TYPES:
         raise HTTPException(status_code=400, detail=f"Tipo de movimiento no soportado: {payload.type}")
     reason = (payload.reason or "").strip()
     if not reason:
         raise HTTPException(status_code=400, detail="El motivo es obligatorio")
+    amount = None
+    if payload.type in ("deposit", "withdrawal"):
+        if payload.amount is None or float(payload.amount) <= 0:
+            raise HTTPException(status_code=400, detail="El monto debe ser mayor a cero")
+        amount = round(float(payload.amount), 2)
     tid = get_tenant_id(user)
     doc = {
         "id": gen_id(),
@@ -546,6 +552,8 @@ async def create_cash_movement(
         "created_by_name": user.get("name") or user.get("username"),
         "created_at": now_iso(),
     }
+    if amount is not None:
+        doc["amount"] = amount
     await db.cash_movements.insert_one(doc)
     return clean(doc)
 

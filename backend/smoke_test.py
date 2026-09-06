@@ -404,11 +404,32 @@ with client:  # triggers startup (seed)
     check("prep cannot open drawer (403)", client.post("/api/cash-movements", headers=prep, json={"type": "drawer_open", "reason": "x"}).status_code == 403)
     check("missing reason rejected (400)", client.post("/api/cash-movements", headers=cashier, json={"type": "drawer_open"}).status_code == 400)
     check("blank reason rejected (400)", client.post("/api/cash-movements", headers=cashier, json={"type": "drawer_open", "reason": "   "}).status_code == 400)
-    check("unsupported type rejected (400)", client.post("/api/cash-movements", headers=cashier, json={"type": "deposit", "reason": "x"}).status_code == 400)
+    check("unsupported type rejected (400)", client.post("/api/cash-movements", headers=cashier, json={"type": "teleport", "reason": "x"}).status_code == 400)
+
+    print("\n== Manual cash deposits / withdrawals (#27) ==")
+    r = client.post("/api/cash-movements", headers=cashier, json={"type": "deposit", "amount": 500, "reason": "Depósito de caja turno"})
+    check("cashier deposits cash (audited)", r.status_code == 200)
+    dep = r.json()
+    check("deposit stores positive amount", dep.get("amount") == 500)
+    check("deposit records reason", dep["reason"] == "Depósito de caja turno")
+
+    r = client.post("/api/cash-movements", headers=cashier, json={"type": "withdrawal", "amount": 120.5, "reason": "Retiro para compras"})
+    check("cashier withdraws cash (audited)", r.status_code == 200)
+    wd = r.json()
+    check("withdrawal stores positive amount", wd.get("amount") == 120.5)
+
+    check("owner deposits cash (audited)", client.post("/api/cash-movements", headers=owner, json={"type": "deposit", "amount": 300, "reason": "Depósito dueño"}).status_code == 200)
+    check("owner withdraws cash (audited)", client.post("/api/cash-movements", headers=owner, json={"type": "withdrawal", "amount": 50, "reason": "Retiro dueño"}).status_code == 200)
+
+    check("deposit without amount rejected (400)", client.post("/api/cash-movements", headers=cashier, json={"type": "deposit", "reason": "x"}).status_code == 400)
+    check("zero deposit rejected (400)", client.post("/api/cash-movements", headers=cashier, json={"type": "deposit", "amount": 0, "reason": "x"}).status_code == 400)
+    check("negative withdrawal rejected (400)", client.post("/api/cash-movements", headers=cashier, json={"type": "withdrawal", "amount": -10, "reason": "x"}).status_code == 400)
 
     log = client.get("/api/cash-movements", headers=cashier).json()
     opens = [m for m in log if m["type"] == "drawer_open"]
     check("audit log lists both opens", len(opens) >= 2)
+    check("audit log lists manual deposit", any(m["type"] == "deposit" and m.get("amount") == 500 for m in log))
+    check("audit log lists withdrawal", any(m["type"] == "withdrawal" and m.get("amount") == 120.5 for m in log))
 
     print("\n== Cash auto-deposit on payment (#30) ==")
     moves = client.get("/api/cash-movements", headers=cashier).json()

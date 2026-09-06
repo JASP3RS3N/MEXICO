@@ -325,12 +325,13 @@ class SettingsUpdate(BaseModel):
 # Cash movements (movimientos de caja con auditoría) — #29
 # ---------------------------------------------------------------------------
 class CashMovementCreate(BaseModel):
-    type: str  # hoy solo "drawer_open"; otros tipos se rechazan en la ruta
+    type: str  # drawer_open | deposit | withdrawal
+    amount: Optional[float] = None  # obligatorio y > 0 para deposit/withdrawal; validado en la ruta
     reason: Optional[str] = None  # motivo obligatorio; validado en la ruta (400 si vacío)
 
 
-# Tipos de movimiento soportados. Se amplía cuando lleguen depósitos/retiros.
-CASH_MOVEMENT_TYPES = {"drawer_open"}
+# Tipos de movimiento soportados (#27: depósitos y retiros manuales).
+CASH_MOVEMENT_TYPES = {"drawer_open", "deposit", "withdrawal"}
 
 
 # ---------------------------------------------------------------------------
