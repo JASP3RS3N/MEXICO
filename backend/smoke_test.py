@@ -16,7 +16,7 @@ import server  # noqa: E402
 
 from io import BytesIO  # noqa: E402
 
-from openpyxl import load_workbook  # noqa: E402
+from openpyxl import Workbook, load_workbook  # noqa: E402
 
 client = TestClient(server.app)
 PASS, FAIL = 0, 0
@@ -249,6 +249,84 @@ with client:  # triggers startup (seed)
 
     check("cashier cannot download template (403)", client.get(f"/api/suppliers/{sup_id}/quote-template", headers=cashier).status_code == 403)
     check("unknown supplier -> 404", client.get("/api/suppliers/nope/quote-template", headers=owner).status_code == 404)
+
+    print("\n== Supplier quote import (#19) ==")
+    XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    QUOTE_HEADERS = ["SKU", "Insumo", "Unidad", "Costo actual (MXN)", "Precio cotizado (MXN)", "Mínimo pedido", "Lead time (días)"]
+
+    def build_quote(rows, header_row=6):
+        wbq = Workbook()
+        wsq = wbq.active
+        wsq.title = "Cotización"
+        for i in range(1, header_row):
+            wsq.append(["SOLICITUD DE COTIZACIÓN"] if i == 1 else [])
+        wsq.append(QUOTE_HEADERS)
+        for r in rows:
+            wsq.append(r)
+        buf = BytesIO()
+        wbq.save(buf)
+        return buf.getvalue()
+
+    def upload_quote(payload, name="cotizacion.xlsx", hdrs=owner):
+        return client.post(f"/api/suppliers/{sup_id}/quote-import", headers=hdrs, files={"file": (name, payload, XLSX_MIME)})
+
+    # 1) Round-trip: download the template (#20), fill prices and send it back.
+    tpl_bytes = client.get(f"/api/suppliers/{sup_id}/quote-template", headers=owner).content
+    wb3 = load_workbook(BytesIO(tpl_bytes))
+    ws3 = wb3["Cotización"]
+    h3 = next(i for i, row in enumerate(ws3.iter_rows(max_row=10), start=1) if any(c.value == "Insumo" for c in row))
+    pcol = next(n + 1 for n, c in enumerate(ws3[h3]) if c.value and "Precio cotizado" in str(c.value))
+    ws3.cell(row=h3 + 1, column=pcol, value=42.75)   # mat0: existing offering (12.5) -> updated
+    ws3.cell(row=h3 + 1, column=6, value=8)
+    ws3.cell(row=h3 + 1, column=7, value=5)
+    ws3.cell(row=h3 + 2, column=pcol, value=18.90)   # second material: no offering -> created
+    ws3.cell(row=h3 + 2, column=6, value=3)
+    ws3.cell(row=h3 + 2, column=7, value=4)
+    buf = BytesIO()
+    wb3.save(buf)
+
+    r = upload_quote(buf.getvalue(), name="cotizacion_devuelta.xlsx")
+    check("quote import ok (200)", r.status_code == 200)
+    res = r.json()
+    imp_a = next((i for i in res.get("imported", []) if i["material_id"] == mat0["id"]), None)
+    imp_b = next((i for i in res.get("imported", []) if i["material_id"] == mats_now[1]["id"]), None)
+    check("existing offering updated with old/new cost", imp_a is not None and imp_a["action"] == "updated"
+          and imp_a["old_cost_per_unit"] == 12.5 and imp_a["new_cost_per_unit"] == 42.75
+          and imp_a["min_order"] == 8.0 and imp_a["lead_time_days"] == 5)
+    check("missing offering created", imp_b is not None and imp_b["action"] == "created"
+          and imp_b["new_cost_per_unit"] == 18.90 and imp_b["min_order"] == 3.0 and imp_b["lead_time_days"] == 4)
+    check("only priced rows imported", len(res.get("imported", [])) == 2 and res.get("not_found") == [])
+    check("blank-price rows reported as skipped", len(res.get("skipped", [])) == len(mats_now) - 2)
+
+    # 2) Persistence: a fresh template must show the imported offering values.
+    wb4 = load_workbook(BytesIO(client.get(f"/api/suppliers/{sup_id}/quote-template", headers=owner).content))
+    ws4 = wb4["Cotización"]
+    h4 = next(i for i, row in enumerate(ws4.iter_rows(max_row=10), start=1) if any(c.value == "Insumo" for c in row))
+    rows_by_name = {str(rw[1].value): rw for rw in ws4.iter_rows(min_row=h4 + 1) if rw[1].value}
+    ra, rb2 = rows_by_name[mat0["name"]], rows_by_name[mats_now[1]["name"]]
+    check("updated offering persisted (cost/min/lead)", round(float(ra[3].value), 2) == 42.75 and float(ra[5].value) == 8 and int(ra[6].value) == 5)
+    check("created offering persisted", round(float(rb2[3].value), 2) == 18.90 and float(rb2[5].value) == 3 and int(rb2[6].value) == 4)
+
+    # 3) Hand-crafted file: unknown material + invalid price are reported, not applied.
+    edge_mat = mats_now[2] if len(mats_now) > 2 else mat0
+    r = upload_quote(build_quote([["", "Insumo que no existe", "", None, 99.0], [None, edge_mat["name"], "", None, "N/D"]]))
+    check("unknown material reported in not_found", r.status_code == 200 and len(r.json().get("not_found", [])) == 1)
+    check("invalid price reported in skipped", len(r.json().get("skipped", [])) == 1 and r.json().get("imported") == [])
+
+    # 4) Header on row 1 (supplier removed the title rows) still parses.
+    r = upload_quote(build_quote([[None, edge_mat["name"], "", None, 7.25]], header_row=1))
+    check("header on first row accepted", r.status_code == 200 and len(r.json().get("imported", [])) == 1)
+
+    # 5) Error cases.
+    check("non-xlsx rejected (400)", upload_quote(b"hola mundo", name="cotizacion.txt").status_code == 400)
+    check("corrupted xlsx rejected (400)", upload_quote(b"PK\x03\x04 garbage", name="roto.xlsx").status_code == 400)
+    wb5 = Workbook()
+    ws5 = wb5.active
+    ws5.append(["Hola", "Mundo"])
+    buf = BytesIO(); wb5.save(buf)
+    check("file without quote headers rejected (400)", upload_quote(buf.getvalue()).status_code == 400)
+    check("unknown supplier -> 404", client.post("/api/suppliers/nope/quote-import", headers=owner, files={"file": ("c.xlsx", tpl_bytes, XLSX_MIME)}).status_code == 404)
+    check("cashier cannot import (403)", upload_quote(tpl_bytes, hdrs=cashier).status_code == 403)
 
     print("\n== Finance / P&L ==")
     pnl = client.get("/api/finance/pnl", headers=owner).json()

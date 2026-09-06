@@ -1,11 +1,12 @@
 """Raw materials (materia prima) master data + purchase orders."""
 import math
+import unicodedata
 from datetime import timedelta
 from io import BytesIO
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
@@ -441,6 +442,208 @@ async def supplier_quote_template(supplier_id: str, user: dict = Depends(require
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+# ---------------------------------------------------------------------------
+# Supplier quote import (carga de cotizaciones recibidas en Excel, #19)
+# ---------------------------------------------------------------------------
+def _norm_text(value) -> str:
+    """Lowercase + strip accents/extra whitespace so supplier-typed headers and
+    material names match the template's canonical spelling."""
+    if value is None:
+        return ""
+    s = unicodedata.normalize("NFD", str(value).lower())
+    s = "".join(ch for ch in s if unicodedata.category(ch) != "Mn")
+    return " ".join(s.split())
+
+
+def _to_float(value, default=None):
+    """Parse a cell into a float (accepts numbers and plain numeric text like
+    '45.90' or '45,90'); returns `default` for anything else."""
+    if value is None or isinstance(value, bool):
+        return default
+    if isinstance(value, (int, float)):
+        return float(value)
+    s = str(value).strip()
+    if not s:
+        return default
+    try:
+        return float(s)
+    except ValueError:
+        pass
+    try:
+        return float(s.replace(",", "."))
+    except ValueError:
+        return default
+
+
+def _to_int(value, default):
+    f = _to_float(value)
+    if f is None:
+        return default
+    return int(f)
+
+
+@router.post("/suppliers/{supplier_id}/quote-import")
+async def supplier_quote_import(
+    supplier_id: str,
+    file: UploadFile = File(...),
+    user: dict = Depends(require_owner),
+):
+    """Parses a quote Excel file sent back by the supplier (the one generated
+    by #20) and upserts it into this supplier's offerings.
+
+    Rows are matched to materials by name (or SKU when present). A numeric
+    "Precio cotizado" updates the existing active offering for the pair or
+    creates a new one; rows that cannot be understood are reported back in
+    `not_found` / `skipped` instead of being silently dropped.
+    """
+    tenant_id = get_tenant_id(user)
+    sup = await db.suppliers.find_one(tenant_query(tenant_id, {"id": supplier_id}), {"_id": 0})
+    if not sup:
+        raise HTTPException(status_code=404, detail="Proveedor no encontrado")
+
+    filename = file.filename or ""
+    if not filename.lower().endswith(".xlsx"):
+        raise HTTPException(status_code=400, detail="El archivo debe ser un Excel .xlsx (plantilla de cotización)")
+
+    content = await file.read()
+    try:
+        wb = load_workbook(BytesIO(content), data_only=True)
+    except Exception:
+        raise HTTPException(status_code=400, detail="No se pudo leer el archivo como un Excel válido")
+
+    ws = wb["Cotización"] if "Cotización" in wb.sheetnames else wb[wb.sheetnames[0]]
+
+    # Locate the header row (the template puts it on row 6, but suppliers may
+    # add/remove rows above). We need at least "Insumo" and "Precio cotizado".
+    col_idx = {}
+    header_row = None
+    for i, row in enumerate(ws.iter_rows(max_row=100), start=1):
+        values = [_norm_text(c.value) for c in row]
+        if "insumo" in values and "precio cotizado (mxn)" in values:
+            col_idx = {v: n for n, v in enumerate(values) if v}
+            header_row = i
+            break
+
+    if header_row is None or "insumo" not in col_idx or "precio cotizado (mxn)" not in col_idx:
+        wb.close()
+        raise HTTPException(
+            status_code=400,
+            detail="No se encontró la tabla de cotización (falta el encabezado 'Insumo' / 'Precio cotizado (MXN)')",
+        )
+
+    def cell(row_values, key):
+        n = col_idx.get(key)
+        if n is None or n >= len(row_values):
+            return None
+        return row_values[n].value
+
+    materials = await db.materials.find(tenant_query(tenant_id, {"active": True}), {"_id": 0}).to_list(5000)
+    by_name = {}
+    by_sku = {}
+    for m in materials:
+        name_key = _norm_text(m.get("name"))
+        if name_key and name_key not in by_name:
+            by_name[name_key] = m
+        sku_key = _norm_text(m.get("sku"))
+        if sku_key and sku_key not in by_sku:
+            by_sku[sku_key] = m
+
+    existing = {
+        o["material_id"]: o
+        for o in await db.supplier_offerings.find(
+            tenant_query(tenant_id, {"supplier_id": supplier_id, "active": True}), {"_id": 0}
+        ).to_list(5000)
+    }
+
+    imported = []
+    not_found = []
+    skipped = []
+
+    for r_i, row in enumerate(ws.iter_rows(min_row=header_row + 1), start=header_row + 1):
+        values = list(row)
+        name_raw = cell(values, "insumo")
+        name = str(name_raw).strip() if name_raw is not None else ""
+        if not name:
+            continue  # blank row (or trailing empty rows)
+
+        price = _to_float(cell(values, "precio cotizado (mxn)"))
+        if price is None or price <= 0:
+            skipped.append({"row": r_i, "name": name, "reason": "Precio cotizado en blanco o inválido"})
+            continue
+
+        sku_key = _norm_text(cell(values, "sku"))
+        mat = by_name.get(_norm_text(name)) or (by_sku.get(sku_key) if sku_key else None)
+        if not mat:
+            not_found.append({"row": r_i, "name": name})
+            continue
+
+        min_order = max(0.0, _to_float(cell(values, "minimo pedido"), 0.0))
+        lead_time_days = max(0, _to_int(cell(values, "lead time (dias)"), 3))
+
+        old = existing.get(mat["id"])
+        new_cost = round(price, 4)
+        if old:
+            updates = {
+                "cost_per_unit": new_cost,
+                "min_order": min_order,
+                "lead_time_days": lead_time_days,
+                "updated_at": now_iso(),
+            }
+            if new_cost != round(float(old.get("cost_per_unit", 0)), 4):
+                updates["last_price_update"] = now_iso()[:10]
+            await db.supplier_offerings.update_one(tenant_query(tenant_id, {"id": old["id"]}), {"$set": updates})
+            existing[mat["id"]] = {**old, **updates}
+            imported.append(
+                {
+                    "row": r_i,
+                    "material_id": mat["id"],
+                    "material_name": mat["name"],
+                    "action": "updated",
+                    "old_cost_per_unit": round(float(old.get("cost_per_unit", 0)), 4),
+                    "new_cost_per_unit": new_cost,
+                    "min_order": min_order,
+                    "lead_time_days": lead_time_days,
+                }
+            )
+        else:
+            doc = {
+                "id": gen_id(),
+                "tenant_id": tenant_id,
+                "supplier_id": supplier_id,
+                "material_id": mat["id"],
+                "cost_per_unit": new_cost,
+                "min_order": min_order,
+                "lead_time_days": lead_time_days,
+                "last_price_update": now_iso()[:10],
+                "active": True,
+                "created_at": now_iso(),
+                "updated_at": now_iso(),
+            }
+            await db.supplier_offerings.insert_one(doc)
+            existing[mat["id"]] = doc
+            imported.append(
+                {
+                    "row": r_i,
+                    "material_id": mat["id"],
+                    "material_name": mat["name"],
+                    "action": "created",
+                    "old_cost_per_unit": None,
+                    "new_cost_per_unit": new_cost,
+                    "min_order": min_order,
+                    "lead_time_days": lead_time_days,
+                }
+            )
+
+    wb.close()
+    return {
+        "supplier_id": supplier_id,
+        "supplier_name": sup["name"],
+        "imported": imported,
+        "not_found": not_found,
+        "skipped": skipped,
+    }
 
 
 # ---------------------------------------------------------------------------
