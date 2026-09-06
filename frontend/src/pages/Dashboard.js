@@ -23,8 +23,9 @@ import {
   Wallet,
   Percent,
   Trophy,
+  Download,
 } from "lucide-react";
-import api from "@/lib/api";
+import api, { downloadBlob } from "@/lib/api";
 import { PageHeader } from "@/components/Layout";
 import { Card, CardHead, Stat, PageLoader, Badge } from "@/components/kit";
 import { money, num, pct, dayRange, monthRange } from "@/lib/format";
@@ -70,6 +71,22 @@ export default function Dashboard() {
   const [period, setPeriod] = useState("month");
   const [currency, setCurrency] = useState("MXN");
   const [loading, setLoading] = useState(true);
+  const [exporting, setExporting] = useState(false);
+
+  const exportPnl = async (format) => {
+    const range = rangeFor(period);
+    setExporting(true);
+    try {
+      await downloadBlob(
+        `/finance/pnl/export?format=${format}&start=${encodeURIComponent(range.start)}&end=${encodeURIComponent(range.end)}`,
+        `pnl_${period}.${format}`
+      );
+    } catch {
+      alert("No se pudo generar el reporte");
+    } finally {
+      setExporting(false);
+    }
+  };
 
   useEffect(() => {
     api.get("/settings").then(({ data }) => data?.currency && setCurrency(data.currency)).catch(() => {});
@@ -176,7 +193,28 @@ export default function Dashboard() {
         </Card>
 
         <Card>
-          <CardHead title="Estado de resultados (P&L)" subtitle="Periodo seleccionado" />
+          <CardHead
+            title="Estado de resultados (P&L)"
+            subtitle="Periodo seleccionado"
+            action={
+              <div className="flex gap-2">
+                <button
+                  onClick={() => exportPnl("xlsx")}
+                  disabled={exporting}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm bg-surface2 border border-border text-textMain hover:text-textBright transition disabled:opacity-50"
+                >
+                  <Download size={14} /> Excel
+                </button>
+                <button
+                  onClick={() => exportPnl("pdf")}
+                  disabled={exporting}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm bg-surface2 border border-border text-textMain hover:text-textBright transition disabled:opacity-50"
+                >
+                  <Download size={14} /> PDF
+                </button>
+              </div>
+            }
+          />
           <div className="p-5 space-y-2.5">
             <PnLRow label="Ingresos (neto)" value={money(pnl?.revenue, currency)} strong />
             <PnLRow label="(–) Costo de ventas" value={`- ${money(pnl?.cogs, currency)}`} sub />

@@ -1,8 +1,12 @@
 """Finance: P&L, daily sales dashboard, expenses and settings. Owner only."""
+import io
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from openpyxl import Workbook
+from reportlab.lib.pagesizes import A4
+from reportlab.pdfgen import canvas as rl_canvas
 
 from config import ORDER_PAID, clean, db, gen_id, now, now_iso, tenant_query
 from crypto_utils import encrypt_value
@@ -261,6 +265,112 @@ async def daily_sales(
             key=lambda x: -x["qty"],
         )[:10],
     }
+
+
+# ---------------------------------------------------------------------------
+# P&L export (#21): xlsx / pdf binary downloads (owner only)
+# ---------------------------------------------------------------------------
+@router.get("/finance/pnl/export")
+async def pnl_export(
+    format: str = Query("xlsx"),
+    start: str = Query(None),
+    end: str = Query(None),
+    user: dict = Depends(require_owner),
+):
+    fmt = (format or "").lower()
+    if fmt not in ("xlsx", "pdf"):
+        raise HTTPException(400, "Formato no soportado. Usa xlsx o pdf.")
+
+    data = await profit_and_loss(start=start, end=end, user=user)
+    tenant_doc = await db.tenants.find_one({"id": get_tenant_id(user)}, {"name": 1, "_id": 0})
+    tenant_name = (tenant_doc or {}).get("name") or "Restaurante"
+    period = data["period"]
+    period_label = f"{period['start'][:10]} - {period['end'][:10]}"
+    filename_base = f"pnl_{period['start'][:10].replace('-', '')}_{period['end'][:10].replace('-', '')}"
+
+    if fmt == "xlsx":
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "P&L"
+        ws.append(["Concepto", "Monto"])
+        for label, value in (
+            ("Ingresos (neto)", data["revenue"]),
+            ("(-) Costo de ventas", -data["cogs"]),
+            ("Utilidad bruta", data["gross_profit"]),
+            ("Margen bruto (%)", round(data["gross_margin"], 2)),
+            ("(-) Gastos operativos", -data["operating_expenses"]),
+            ("    de los cuales nómina", -data["payroll"]),
+            ("Utilidad neta", data["net_profit"]),
+            ("Margen neto (%)", round(data["net_margin"], 2)),
+            ("IVA cobrado (referencia)", data["tax_collected"]),
+        ):
+            ws.append([label, round(float(value), 2)])
+
+        ws2 = wb.create_sheet("Serie diaria")
+        ws2.append(["Fecha", "Ventas netas", "Costo de ventas", "Utilidad bruta"])
+        for d in data["series"]:
+            daily_net = round(float(d["net_sales"]) - float(d["cogs"]), 2)
+            ws2.append([d["date"], round(float(d["net_sales"]), 2), round(float(d["cogs"]), 2), daily_net])
+
+        buf = io.BytesIO()
+        wb.save(buf)
+        return Response(
+            content=buf.getvalue(),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="{filename_base}.xlsx"'},
+        )
+
+    # pdf
+    buf = io.BytesIO()
+    c = rl_canvas.Canvas(buf, pagesize=A4)
+    width, height = A4
+    y = height - 50
+    c.setFont("Helvetica-Bold", 16)
+    c.drawString(50, y, "Estado de resultados (P&L)")
+    y -= 20
+    c.setFont("Helvetica", 10)
+    c.drawString(50, y, f"{tenant_name} - {period_label}")
+    y -= 30
+
+    for label, value in (
+        ("Ingresos (neto)", data["revenue"]),
+        ("(-) Costo de ventas", -data["cogs"]),
+        ("Utilidad bruta", data["gross_profit"]),
+        ("Margen bruto (%)", round(data["gross_margin"], 2)),
+        ("(-) Gastos operativos", -data["operating_expenses"]),
+        ("    de los cuales nómina", -data["payroll"]),
+        ("Utilidad neta", data["net_profit"]),
+        ("Margen neto (%)", round(data["net_margin"], 2)),
+        ("IVA cobrado (referencia)", data["tax_collected"]),
+    ):
+        c.setFont("Helvetica-Bold" if "Utilidad" in label else "Helvetica", 10)
+        c.drawString(50, y, label)
+        c.drawRightString(width - 50, y, f"{float(value):,.2f}")
+        y -= 18
+
+    y -= 14
+    c.setFont("Helvetica-Bold", 11)
+    c.drawString(50, y, "Serie diaria")
+    y -= 16
+    c.setFont("Helvetica", 9)
+    for d in data["series"]:
+        if y < 50:
+            c.showPage()
+            y = height - 50
+        c.drawString(
+            50,
+            y,
+            f"{d['date']}   Ventas {float(d['net_sales']):,.2f}   Costo {float(d['cogs']):,.2f}   Utilidad {round(float(d['net_sales']) - float(d['cogs']), 2):,.2f}",
+        )
+        y -= 14
+
+    c.showPage()
+    c.save()
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename_base}.pdf"'},
+    )
 
 
 # ---------------------------------------------------------------------------

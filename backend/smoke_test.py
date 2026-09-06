@@ -345,6 +345,42 @@ with client:  # triggers startup (seed)
     dash = client.get("/api/finance/dashboard", headers=owner).json()
     check("dashboard today block", "today" in dash and "month" in dash)
 
+    # ------------------------------------------------------------------ P&L export (#21)
+    print("\n== P&L export (#21) ==")
+    r = client.get("/api/finance/pnl/export", headers=owner, params={"format": "xlsx"})
+    check(
+        "xlsx export 200 + content type",
+        r.status_code == 200 and "spreadsheetml" in (r.headers.get("content-type") or ""),
+    )
+    check("xlsx body is a zip archive", len(r.content) > 100 and r.content[:2] == b"PK")
+
+    def _xls_val(sheet, label):
+        for row in sheet.iter_rows():
+            if row[0].value == label and len(row) > 1:
+                return row[1].value
+        return None
+
+    wb = load_workbook(BytesIO(r.content), data_only=True)
+    check("xlsx sheets present", "P&L" in wb.sheetnames and "Serie diaria" in wb.sheetnames)
+    net_xls = _xls_val(wb["P&L"], "Utilidad neta")
+    check(
+        "xlsx net profit matches API",
+        net_xls is not None and abs(float(net_xls) - pnl2["net_profit"]) < 0.01,
+    )
+
+    r = client.get("/api/finance/pnl/export", headers=owner, params={"format": "pdf"})
+    check(
+        "pdf export 200 + content type",
+        r.status_code == 200 and (r.headers.get("content-type") or "").startswith("application/pdf"),
+    )
+    check("pdf magic bytes %PDF", len(r.content) > 500 and r.content[:4] == b"%PDF")
+
+    check(
+        "cashier cannot export P&L (403)",
+        client.get("/api/finance/pnl/export", headers=cashier, params={"format": "xlsx"}).status_code == 403,
+    )
+    check("invalid format rejected (400)", client.get("/api/finance/pnl/export", headers=owner, params={"format": "csv"}).status_code == 400)
+
     print("\n== Cash movements / drawer open (#29) ==")
     tid = client.get("/api/auth/me", headers=owner).json()["user"]["tenant_id"]
     r = client.post("/api/cash-movements", headers=cashier, json={"type": "drawer_open", "reason": "Apertura de caja turno mañana"})
