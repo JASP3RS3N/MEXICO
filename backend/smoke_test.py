@@ -14,6 +14,10 @@ motor.motor_asyncio.AsyncIOMotorClient = mongomock_motor.AsyncMongoMockClient
 from fastapi.testclient import TestClient  # noqa: E402
 import server  # noqa: E402
 
+from io import BytesIO  # noqa: E402
+
+from openpyxl import load_workbook  # noqa: E402
+
 client = TestClient(server.app)
 PASS, FAIL = 0, 0
 
@@ -208,6 +212,43 @@ with client:  # triggers startup (seed)
     stock_after_po = next(m["current_stock"] for m in client.get("/api/materials", headers=owner).json() if m["id"] == low_mat["id"])
     check("stock increased by received qty", stock_after_po == stock_before_po + 10)
     check("cannot re-receive PO", client.put(f"/api/purchase-orders/{po['id']}/status", headers=owner, json={"status": "received"}).status_code == 400)
+
+    print("\n== Supplier quote template (#20) ==")
+    r = client.post("/api/suppliers", headers=owner, json={"name": "Carnes del Norte"})
+    check("owner creates supplier for template", r.status_code == 200)
+    sup_id = r.json()["id"]
+
+    mats_now = [m for m in client.get("/api/materials", headers=owner).json() if m.get("active", True)]
+    r = client.get(f"/api/suppliers/{sup_id}/quote-template", headers=owner)
+    check("template download ok (200)", r.status_code == 200)
+    check("template is xlsx content type", "spreadsheetml" in r.headers.get("content-type", ""))
+
+    wb = load_workbook(BytesIO(r.content))
+    ws = wb["Cotización"]
+    rows = list(ws.iter_rows())
+    header_idx = next(i for i, row in enumerate(rows) if any(c.value == "Insumo" for c in row))
+    data_rows = [row for row in rows[header_idx + 1:] if row[1].value]
+    check("template lists every active material", len(data_rows) == len(mats_now))
+
+    # Pre-fill: register an offering, regenerate, and verify the cost column picks it up.
+    mat0 = mats_now[0]
+    r = client.post(
+        "/api/supplier-offerings",
+        headers=owner,
+        json={"supplier_id": sup_id, "material_id": mat0["id"], "cost_per_unit": 12.5, "min_order": 5, "lead_time_days": 3},
+    )
+    check("offering created for pre-fill test", r.status_code == 200)
+    wb2 = load_workbook(BytesIO(client.get(f"/api/suppliers/{sup_id}/quote-template", headers=owner).content))
+    ws2 = wb2["Cotización"]
+    rows2 = list(ws2.iter_rows())
+    h2 = next(i for i, row in enumerate(rows2) if any(c.value == "Insumo" for c in row))
+    col_idx = {c.value: n for n, c in enumerate(rows2[h2])}
+    prefilled = [row for row in rows2[h2 + 1:] if row[1].value == mat0["name"]]
+    check("offering cost pre-filled in template", bool(prefilled) and float(prefilled[0][col_idx["Costo actual (MXN)"]].value) == 12.5)
+    check("offering lead time pre-filled", bool(prefilled) and int(prefilled[0][col_idx["Lead time (días)"]].value) == 3)
+
+    check("cashier cannot download template (403)", client.get(f"/api/suppliers/{sup_id}/quote-template", headers=cashier).status_code == 403)
+    check("unknown supplier -> 404", client.get("/api/suppliers/nope/quote-template", headers=owner).status_code == 404)
 
     print("\n== Finance / P&L ==")
     pnl = client.get("/api/finance/pnl", headers=owner).json()

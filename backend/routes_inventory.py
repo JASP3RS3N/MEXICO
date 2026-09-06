@@ -1,8 +1,13 @@
 """Raw materials (materia prima) master data + purchase orders."""
 import math
 from datetime import timedelta
+from io import BytesIO
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.utils import get_column_letter
 
 from config import (
     PO_CANCELLED,
@@ -331,6 +336,111 @@ async def material_offerings(material_id: str, user: dict = Depends(require_owne
     if not material:
         raise HTTPException(status_code=404, detail="Materia prima no encontrada")
     return await _get_active_offerings(material_id, tenant_id)
+
+
+# ---------------------------------------------------------------------------
+# Supplier quote templates (plantillas de cotización en Excel, #20)
+# ---------------------------------------------------------------------------
+QUOTE_TEMPLATE_HEADERS = [
+    "SKU",
+    "Insumo",
+    "Unidad",
+    "Costo actual (MXN)",
+    "Precio cotizado (MXN)",
+    "Mínimo pedido",
+    "Lead time (días)",
+]
+
+
+@router.get("/suppliers/{supplier_id}/quote-template")
+async def supplier_quote_template(supplier_id: str, user: dict = Depends(require_owner)):
+    """Generates an Excel template for the supplier to fill in prices.
+
+    Lists every active material with its current cost pre-filled (from this
+    supplier's existing offering when one exists), so the supplier only has to
+    write the "Precio cotizado" column and send the file back — which #19 then
+    parses into supplier offerings.
+    """
+    tenant_id = get_tenant_id(user)
+    sup = await db.suppliers.find_one(tenant_query(tenant_id, {"id": supplier_id}), {"_id": 0})
+    if not sup:
+        raise HTTPException(status_code=404, detail="Proveedor no encontrado")
+
+    materials = (
+        await db.materials.find(tenant_query(tenant_id, {"active": True}), {"_id": 0}).sort("name", 1).to_list(2000)
+    )
+    offerings = {
+        o["material_id"]: o
+        for o in await db.supplier_offerings.find(
+            tenant_query(tenant_id, {"supplier_id": supplier_id, "active": True}), {"_id": 0}
+        ).to_list(5000)
+    }
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Cotización"
+
+    ws["A1"] = "SOLICITUD DE COTIZACIÓN"
+    ws["A1"].font = Font(bold=True, size=14)
+    ws["A2"] = f"Proveedor: {sup['name']}"
+    ws["A3"] = f"Fecha de solicitud: {now_iso()[:10]}"
+    ws["A4"] = (
+        "Complete la columna 'Precio cotizado' con su mejor precio por unidad en MXN. "
+        "Puede agregar filas al final si vende insumos que no están en la lista."
+    )
+
+    header_row = 6
+    for col, title in enumerate(QUOTE_TEMPLATE_HEADERS, start=1):
+        c = ws.cell(row=header_row, column=col, value=title)
+        c.font = Font(bold=True, color="FFFFFF")
+        c.fill = PatternFill("solid", fgColor="2F5B7C")
+        c.alignment = Alignment(horizontal="center")
+
+    row = header_row + 1
+    for mat in materials:
+        off = offerings.get(mat["id"])
+        current_cost = round(float(off["cost_per_unit"]), 4) if off else float(mat.get("cost_per_unit", 0))
+        ws.cell(row=row, column=1, value=mat.get("sku") or "")
+        ws.cell(row=row, column=2, value=mat["name"])
+        ws.cell(row=row, column=3, value=mat.get("unit") or "")
+        ws.cell(row=row, column=4, value=current_cost)
+        # Column 5 ("Precio cotizado") stays blank: that's what the supplier fills in.
+        if off:
+            ws.cell(row=row, column=6, value=float(off["min_order"]))
+            ws.cell(row=row, column=7, value=int(off["lead_time_days"]))
+        row += 1
+
+    for i, width in enumerate([12, 34, 8, 18, 20, 14, 16], start=1):
+        ws.column_dimensions[get_column_letter(i)].width = width
+    ws.freeze_panes = f"A{header_row + 1}"
+
+    info = wb.create_sheet("Instrucciones")
+    for i, line in enumerate(
+        [
+            "Cómo completar esta cotización:",
+            "",
+            "1. Escriba su mejor precio por unidad en la columna 'Precio cotizado (MXN)'.",
+            "2. Use solo números, sin símbolo de moneda ni separadores (ej. 45.90).",
+            "3. No cambie las columnas SKU, Insumo o Unidad: se usan para identificar cada insumo.",
+            "4. Si no vende un insumo, deje su precio en blanco.",
+            "5. Puede agregar filas nuevas al final de la tabla con el mismo formato.",
+            "6. Devuelva el archivo por el mismo medio (correo o WhatsApp).",
+        ],
+        start=1,
+    ):
+        info.cell(row=i, column=1, value=line)
+    info.column_dimensions["A"].width = 90
+
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    slug = "".join(ch for ch in sup["name"].lower() if ch.isalnum())[:30] or "proveedor"
+    filename = f"cotizacion_{slug}_{now_iso()[:10].replace('-', '')}.xlsx"
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 # ---------------------------------------------------------------------------
