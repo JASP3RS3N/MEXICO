@@ -16,7 +16,15 @@ from config import (
     now_iso,
     tenant_query,
 )
-from models import SALES_CHANNELS, OrderCreate, PartySizeUpdate, PaymentMethodUpdate, PaymentRequest, PinTagRequest
+from models import (
+    SALES_CHANNELS,
+    CancelOrderRequest,
+    OrderCreate,
+    PartySizeUpdate,
+    PaymentMethodUpdate,
+    PaymentRequest,
+    PinTagRequest,
+)
 from security import get_current_user, get_tenant_id, require_pin_session, require_roles
 from orders_service import settle_order
 
@@ -305,14 +313,34 @@ async def deliver_order(order_id: str, user: dict = Depends(require_roles("prep"
 
 
 @router.post("/orders/{order_id}/cancel")
-async def cancel_order(order_id: str, user: dict = Depends(require_roles("cashier", "owner"))):
+async def cancel_order(
+    order_id: str,
+    payload: CancelOrderRequest,
+    user: dict = Depends(require_roles("cashier", "owner")),
+):
+    """Cancela una orden aún no cobrada.
+
+    El motivo es obligatorio y se registra auditoría a nivel de documento:
+    quién canceló (usuario), cuándo y el motivo indicado.
+    """
     tenant_id = get_tenant_id(user)
     order = await db.orders.find_one(tenant_query(tenant_id, {"id": order_id}))
     if not order:
         raise HTTPException(status_code=404, detail="Orden no encontrada")
     if order.get("paid"):
         raise HTTPException(status_code=400, detail="No puedes cancelar una orden ya cobrada")
-    return await _set_status(order_id, ORDER_CANCELLED, tenant_id)
+    return await _set_status(
+        order_id,
+        ORDER_CANCELLED,
+        tenant_id,
+        "cancelled_at",
+        extra={
+            "cancel_reason": payload.cancel_reason.strip(),
+            # Auditoría: quién y cuándo canceló la orden.
+            "cancelled_by_user_id": user["id"],
+            "cancelled_by_name": user.get("name", ""),
+        },
+    )
 
 
 # ---------------------------------------------------------------------------

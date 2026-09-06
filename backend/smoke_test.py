@@ -128,6 +128,18 @@ with client:  # triggers startup (seed)
     check("change computed", r.json()["change"] == round(1000 - order["total"], 2))
     check("cannot double-pay", client.post(f"/api/orders/{order['id']}/pay", headers=cashier, json={"method": "efectivo"}).status_code == 400)
 
+    # cancelación auditada (#28): motivo obligatorio + quién/cuándo la canceló
+    r = client.post("/api/orders", headers=cashier, json={"items": [{"product_id": refresco["id"], "qty": 1}]})
+    check("cashier creates order for cancel test", r.status_code == 200)
+    cancel_order = r.json()
+    check("cancel without reason rejected (422)", client.post(f"/api/orders/{cancel_order['id']}/cancel", headers=cashier, json={}).status_code == 422)
+    check("prep cannot cancel order (403)", client.post(f"/api/orders/{cancel_order['id']}/cancel", headers=prep, json={"cancel_reason": "x"}).status_code == 403)
+    r = client.post(f"/api/orders/{cancel_order['id']}/cancel", headers=cashier, json={"cancel_reason": "Cliente se arrepintió"})
+    check("cashier cancels unpaid order", r.status_code == 200 and r.json()["status"] == "cancelled")
+    cancelled = client.get(f"/api/orders/{cancel_order['id']}", headers=owner).json()
+    check("audit records who/when/reason", bool(cancelled.get("cancelled_by_user_id")) and bool(cancelled.get("cancelled_at")) and cancelled.get("cancel_reason") == "Cliente se arrepintió")
+    check("paid order cannot be cancelled (400)", client.post(f"/api/orders/{order['id']}/cancel", headers=owner, json={"cancel_reason": "x"}).status_code == 400)
+
     # propina (tip): el cambio se calcula sobre total + propina
     r = client.post("/api/orders", headers=cashier, json={"items": [{"product_id": refresco["id"], "qty": 1}]})
     check("cashier creates second order (tip test)", r.status_code == 200)

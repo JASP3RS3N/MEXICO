@@ -244,6 +244,10 @@ class PartySizeUpdate(BaseModel):
     party_size: int = Field(..., ge=1)  # >= 1 persona; pydantic devuelve 422 si no
 
 
+class CancelOrderRequest(BaseModel):
+    cancel_reason: str = Field(..., min_length=1)  # motivo obligatorio; pydantic devuelve 422 si falta o está vacío
+
+
 # ---------------------------------------------------------------------------
 # Purchase orders (órdenes de compra)
 # ---------------------------------------------------------------------------
