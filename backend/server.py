@@ -28,6 +28,7 @@ import routes_inventory
 import routes_orders
 import routes_finance
 import routes_ai
+import routes_devices
 import routes_people
 import routes_alerts
 import routes_admin
@@ -60,6 +61,7 @@ api_router.include_router(routes_inventory.router, tags=["inventory"])
 api_router.include_router(routes_orders.router, tags=["orders"])
 api_router.include_router(routes_finance.router, tags=["finance"])
 api_router.include_router(routes_ai.router, tags=["ai"])
+api_router.include_router(routes_devices.router, tags=["devices"])
 api_router.include_router(routes_people.router, tags=["people"])
 api_router.include_router(routes_alerts.router, tags=["alerts"])
 

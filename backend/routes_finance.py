@@ -1,13 +1,17 @@
 """Finance: P&L, daily sales dashboard, expenses and settings. Owner only."""
+import io
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from openpyxl import Workbook
+from reportlab.lib.pagesizes import A4
+from reportlab.pdfgen import canvas as rl_canvas
 
 from config import ORDER_PAID, clean, db, gen_id, now, now_iso, tenant_query
 from crypto_utils import encrypt_value
-from models import ExpenseCreate, SettingsUpdate
-from security import get_current_user, get_tenant_id, require_owner
+from models import CashMovementCreate, CASH_MOVEMENT_TYPES, ExpenseCreate, SettingsUpdate
+from security import get_current_user, get_tenant_id, require_owner, require_roles
 
 router = APIRouter()
 
@@ -264,6 +268,112 @@ async def daily_sales(
 
 
 # ---------------------------------------------------------------------------
+# P&L export (#21): xlsx / pdf binary downloads (owner only)
+# ---------------------------------------------------------------------------
+@router.get("/finance/pnl/export")
+async def pnl_export(
+    format: str = Query("xlsx"),
+    start: str = Query(None),
+    end: str = Query(None),
+    user: dict = Depends(require_owner),
+):
+    fmt = (format or "").lower()
+    if fmt not in ("xlsx", "pdf"):
+        raise HTTPException(400, "Formato no soportado. Usa xlsx o pdf.")
+
+    data = await profit_and_loss(start=start, end=end, user=user)
+    tenant_doc = await db.tenants.find_one({"id": get_tenant_id(user)}, {"name": 1, "_id": 0})
+    tenant_name = (tenant_doc or {}).get("name") or "Restaurante"
+    period = data["period"]
+    period_label = f"{period['start'][:10]} - {period['end'][:10]}"
+    filename_base = f"pnl_{period['start'][:10].replace('-', '')}_{period['end'][:10].replace('-', '')}"
+
+    if fmt == "xlsx":
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "P&L"
+        ws.append(["Concepto", "Monto"])
+        for label, value in (
+            ("Ingresos (neto)", data["revenue"]),
+            ("(-) Costo de ventas", -data["cogs"]),
+            ("Utilidad bruta", data["gross_profit"]),
+            ("Margen bruto (%)", round(data["gross_margin"], 2)),
+            ("(-) Gastos operativos", -data["operating_expenses"]),
+            ("    de los cuales nómina", -data["payroll"]),
+            ("Utilidad neta", data["net_profit"]),
+            ("Margen neto (%)", round(data["net_margin"], 2)),
+            ("IVA cobrado (referencia)", data["tax_collected"]),
+        ):
+            ws.append([label, round(float(value), 2)])
+
+        ws2 = wb.create_sheet("Serie diaria")
+        ws2.append(["Fecha", "Ventas netas", "Costo de ventas", "Utilidad bruta"])
+        for d in data["series"]:
+            daily_net = round(float(d["net_sales"]) - float(d["cogs"]), 2)
+            ws2.append([d["date"], round(float(d["net_sales"]), 2), round(float(d["cogs"]), 2), daily_net])
+
+        buf = io.BytesIO()
+        wb.save(buf)
+        return Response(
+            content=buf.getvalue(),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="{filename_base}.xlsx"'},
+        )
+
+    # pdf
+    buf = io.BytesIO()
+    c = rl_canvas.Canvas(buf, pagesize=A4)
+    width, height = A4
+    y = height - 50
+    c.setFont("Helvetica-Bold", 16)
+    c.drawString(50, y, "Estado de resultados (P&L)")
+    y -= 20
+    c.setFont("Helvetica", 10)
+    c.drawString(50, y, f"{tenant_name} - {period_label}")
+    y -= 30
+
+    for label, value in (
+        ("Ingresos (neto)", data["revenue"]),
+        ("(-) Costo de ventas", -data["cogs"]),
+        ("Utilidad bruta", data["gross_profit"]),
+        ("Margen bruto (%)", round(data["gross_margin"], 2)),
+        ("(-) Gastos operativos", -data["operating_expenses"]),
+        ("    de los cuales nómina", -data["payroll"]),
+        ("Utilidad neta", data["net_profit"]),
+        ("Margen neto (%)", round(data["net_margin"], 2)),
+        ("IVA cobrado (referencia)", data["tax_collected"]),
+    ):
+        c.setFont("Helvetica-Bold" if "Utilidad" in label else "Helvetica", 10)
+        c.drawString(50, y, label)
+        c.drawRightString(width - 50, y, f"{float(value):,.2f}")
+        y -= 18
+
+    y -= 14
+    c.setFont("Helvetica-Bold", 11)
+    c.drawString(50, y, "Serie diaria")
+    y -= 16
+    c.setFont("Helvetica", 9)
+    for d in data["series"]:
+        if y < 50:
+            c.showPage()
+            y = height - 50
+        c.drawString(
+            50,
+            y,
+            f"{d['date']}   Ventas {float(d['net_sales']):,.2f}   Costo {float(d['cogs']):,.2f}   Utilidad {round(float(d['net_sales']) - float(d['cogs']), 2):,.2f}",
+        )
+        y -= 14
+
+    c.showPage()
+    c.save()
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename_base}.pdf"'},
+    )
+
+
+# ---------------------------------------------------------------------------
 # Owner dashboard summary
 # ---------------------------------------------------------------------------
 @router.get("/finance/dashboard")
@@ -378,6 +488,7 @@ async def get_settings(user: dict = Depends(get_current_user)):
         "currency": "MXN",
         "tax_rate": 0.16,
         "tax_included": True,
+        "business_description": None,  # #14: optional; injected into AI prompts when set
     }
     return _scrub_fiscal_config(s)
 
@@ -404,3 +515,55 @@ async def update_settings(payload: SettingsUpdate, user: dict = Depends(require_
     )
     fresh = await db.settings.find_one(tenant_query(tenant_id, {"id": "settings"}), {"_id": 0})
     return _scrub_fiscal_config(fresh)
+
+
+# ---------------------------------------------------------------------------
+# Caja: movimientos manuales auditados (#29 apertura manual de caja)
+# ---------------------------------------------------------------------------
+require_cash_or_owner = require_roles("cashier", "owner")
+
+
+@router.post("/cash-movements")
+async def create_cash_movement(
+    payload: CashMovementCreate, user: dict = Depends(require_cash_or_owner)
+):
+    """Audited manual cash movements (apertura de caja, depósitos y retiros).
+
+    Only cashier and owner may move the cash box. Every movement is stored
+    with who did it and why, so the audit trail lives in ``cash_movements``.
+    Deposits and withdrawals require a positive amount; drawer_open does not.
+    """
+    if payload.type not in CASH_MOVEMENT_TYPES:
+        raise HTTPException(status_code=400, detail=f"Tipo de movimiento no soportado: {payload.type}")
+    reason = (payload.reason or "").strip()
+    if not reason:
+        raise HTTPException(status_code=400, detail="El motivo es obligatorio")
+    amount = None
+    if payload.type in ("deposit", "withdrawal"):
+        if payload.amount is None or float(payload.amount) <= 0:
+            raise HTTPException(status_code=400, detail="El monto debe ser mayor a cero")
+        amount = round(float(payload.amount), 2)
+    tid = get_tenant_id(user)
+    doc = {
+        "id": gen_id(),
+        "tenant_id": tid,
+        "type": payload.type,
+        "reason": reason,
+        "created_by_user_id": user["id"],
+        "created_by_name": user.get("name") or user.get("username"),
+        "created_at": now_iso(),
+    }
+    if amount is not None:
+        doc["amount"] = amount
+    await db.cash_movements.insert_one(doc)
+    return clean(doc)
+
+
+@router.get("/cash-movements")
+async def list_cash_movements(
+    limit: int = Query(100, le=500), user: dict = Depends(require_cash_or_owner)
+):
+    """Audit log of manual cash movements for the tenant (newest first)."""
+    tid = get_tenant_id(user)
+    docs = await db.cash_movements.find(tenant_query(tid)).sort("created_at", -1).to_list(max(1, limit))
+    return [clean(d) for d in docs]

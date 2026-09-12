@@ -55,4 +55,18 @@ export const loginWithPin = async (pin) => {
   return data.user;
 };
 
+// Download a binary file (xlsx/pdf) from an authenticated endpoint and trigger
+// a browser save. The shared instance already attaches the Bearer token.
+export const downloadBlob = async (path, filename) => {
+  const res = await api.get(path, { responseType: "blob" });
+  const url = URL.createObjectURL(new Blob([res.data]));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+};
+
 export default api;

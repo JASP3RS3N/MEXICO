@@ -5,6 +5,9 @@ through FastAPI's TestClient: seeding, auth, RBAC, POS order, kitchen flow,
 payment + inventory deduction, purchase orders and P&L.
 Run: python3 smoke_test.py
 """
+import asyncio
+import json
+
 import mongomock_motor
 import motor.motor_asyncio
 
@@ -13,6 +16,12 @@ motor.motor_asyncio.AsyncIOMotorClient = mongomock_motor.AsyncMongoMockClient
 
 from fastapi.testclient import TestClient  # noqa: E402
 import server  # noqa: E402
+from config import db, now_iso  # noqa: E402
+import routes_ai  # noqa: E402
+
+from io import BytesIO  # noqa: E402
+
+from openpyxl import Workbook, load_workbook  # noqa: E402
 
 client = TestClient(server.app)
 PASS, FAIL = 0, 0
@@ -76,6 +85,27 @@ with client:  # triggers startup (seed)
     new_id = r.json()["id"]
     check("owner deletes user", client.delete(f"/api/users/{new_id}", headers=owner).status_code == 200)
 
+    print("\n== Authorized devices (#10) ==")
+    r = client.post("/api/devices/register", headers=owner, json={"device_id": "dev-smoke-1", "label": "Caja principal"})
+    check("register first device ok", r.status_code == 200 and r.json()["device"]["is_active"] is True)
+    r = client.post("/api/devices/register", headers=owner, json={"device_id": "dev-smoke-2"})
+    check("second device reaches the limit of 2", r.status_code == 200 and r.json()["device"]["is_active"] is True)
+    r = client.post("/api/devices/register", headers=owner, json={"device_id": "dev-smoke-3"})
+    check("third active device rejected (403)", r.status_code == 403)
+    r = client.post("/api/devices/register", headers=owner, json={"device_id": "dev-smoke-1"})
+    check("re-registering an active device is idempotent", r.status_code == 200 and r.json()["device"]["is_active"] is True)
+    lst = client.get("/api/devices", headers=owner).json()
+    check("list shows devices, active_count and limit", len(lst["devices"]) == 2 and lst["active_count"] == 2 and lst["limit"] == 2)
+    r = client.post("/api/devices/dev-smoke-1/deactivate", headers=owner)
+    check("deactivation sets is_active=false", r.status_code == 200 and r.json()["device"]["is_active"] is False)
+    r = client.post("/api/devices/register", headers=owner, json={"device_id": "dev-smoke-3"})
+    check("deactivated slot freed: third device now registers", r.status_code == 200 and r.json()["device"]["is_active"] is True)
+    r = client.post("/api/devices/register", headers=owner, json={"device_id": "dev-smoke-1"})
+    check("reactivating a deactivated device at limit -> 403", r.status_code == 403)
+    check("deactivate unknown device -> 404", client.post("/api/devices/dev-nope/deactivate", headers=owner).status_code == 404)
+    check("cashier cannot register devices (403)", client.post("/api/devices/register", headers=cashier, json={"device_id": "dev-x"}).status_code == 403)
+    check("cashier cannot list devices (403)", client.get("/api/devices", headers=cashier).status_code == 403)
+
     print("\n== Price edit (owner only) ==")
     p0 = products[0]
     check("cashier cannot change price (403)", client.patch(f"/api/products/{p0['id']}/price", headers=cashier, json={"price": 1}).status_code == 403)
@@ -119,6 +149,18 @@ with client:  # triggers startup (seed)
     check("change computed", r.json()["change"] == round(1000 - order["total"], 2))
     check("cannot double-pay", client.post(f"/api/orders/{order['id']}/pay", headers=cashier, json={"method": "efectivo"}).status_code == 400)
 
+    # cancelación auditada (#28): motivo obligatorio + quién/cuándo la canceló
+    r = client.post("/api/orders", headers=cashier, json={"items": [{"product_id": refresco["id"], "qty": 1}]})
+    check("cashier creates order for cancel test", r.status_code == 200)
+    cancel_order = r.json()
+    check("cancel without reason rejected (422)", client.post(f"/api/orders/{cancel_order['id']}/cancel", headers=cashier, json={}).status_code == 422)
+    check("prep cannot cancel order (403)", client.post(f"/api/orders/{cancel_order['id']}/cancel", headers=prep, json={"cancel_reason": "x"}).status_code == 403)
+    r = client.post(f"/api/orders/{cancel_order['id']}/cancel", headers=cashier, json={"cancel_reason": "Cliente se arrepintió"})
+    check("cashier cancels unpaid order", r.status_code == 200 and r.json()["status"] == "cancelled")
+    cancelled = client.get(f"/api/orders/{cancel_order['id']}", headers=owner).json()
+    check("audit records who/when/reason", bool(cancelled.get("cancelled_by_user_id")) and bool(cancelled.get("cancelled_at")) and cancelled.get("cancel_reason") == "Cliente se arrepintió")
+    check("paid order cannot be cancelled (400)", client.post(f"/api/orders/{order['id']}/cancel", headers=owner, json={"cancel_reason": "x"}).status_code == 400)
+
     # propina (tip): el cambio se calcula sobre total + propina
     r = client.post("/api/orders", headers=cashier, json={"items": [{"product_id": refresco["id"], "qty": 1}]})
     check("cashier creates second order (tip test)", r.status_code == 200)
@@ -140,6 +182,30 @@ with client:  # triggers startup (seed)
     check("correction does not change totals", corrected["total"] == order["total"] and corrected["amount_received"] == 1000.0)
     check("order stays paid (not reopened)", corrected.get("paid") is True)
     check("prep cannot correct payment method (403)", client.post(f"/api/orders/{order['id']}/correct-payment-method", headers=prep, json={"method": "efectivo"}).status_code == 403)
+
+    # número de personas en mesa ya abierta (#32) — solo cashier/owner, con auditoría
+    r = client.post("/api/orders", headers=cashier, json={
+        "customer_name": "Mesa 7",
+        "table": "7",
+        "party_size": 2,
+        "items": [{"product_id": refresco["id"], "qty": 1}],
+    })
+    check("cashier creates table order with party size", r.status_code == 200 and r.json().get("party_size") == 2)
+    table_order = r.json()
+
+    r = client.post(f"/api/orders/{table_order['id']}/party-size", headers=cashier, json={"party_size": 5})
+    check("cashier changes party size on open table", r.status_code == 200 and r.json().get("party_size") == 5)
+    check("party size audit records who/when", bool(r.json().get("party_size_changed_by_user_id")) and bool(r.json().get("party_size_changed_at")))
+
+    check("owner can change party size", client.post(f"/api/orders/{table_order['id']}/party-size", headers=owner, json={"party_size": 4}).status_code == 200)
+    check("prep cannot change party size (403)", client.post(f"/api/orders/{table_order['id']}/party-size", headers=prep, json={"party_size": 6}).status_code == 403)
+    check("zero party size rejected (422)", client.post(f"/api/orders/{table_order['id']}/party-size", headers=cashier, json={"party_size": 0}).status_code == 422)
+
+    r = client.post("/api/orders", headers=cashier, json={"items": [{"product_id": refresco["id"], "qty": 1}]})
+    check("order without table rejects party-size (400)", client.post(f"/api/orders/{r.json()['id']}/party-size", headers=cashier, json={"party_size": 3}).status_code == 400)
+
+    # orden ya cobrada → no se puede cambiar el número de personas
+    check("paid order rejects party-size (400)", client.post(f"/api/orders/{order['id']}/party-size", headers=cashier, json={"party_size": 9}).status_code == 400)
 
     mats_after = {m["id"]: m["current_stock"] for m in client.get("/api/materials", headers=owner).json()}
     brisket_mat = next(m["material_id"] for m in brisket["recipe"] if True)
@@ -185,6 +251,121 @@ with client:  # triggers startup (seed)
     check("stock increased by received qty", stock_after_po == stock_before_po + 10)
     check("cannot re-receive PO", client.put(f"/api/purchase-orders/{po['id']}/status", headers=owner, json={"status": "received"}).status_code == 400)
 
+    print("\n== Supplier quote template (#20) ==")
+    r = client.post("/api/suppliers", headers=owner, json={"name": "Carnes del Norte"})
+    check("owner creates supplier for template", r.status_code == 200)
+    sup_id = r.json()["id"]
+
+    mats_now = [m for m in client.get("/api/materials", headers=owner).json() if m.get("active", True)]
+    r = client.get(f"/api/suppliers/{sup_id}/quote-template", headers=owner)
+    check("template download ok (200)", r.status_code == 200)
+    check("template is xlsx content type", "spreadsheetml" in r.headers.get("content-type", ""))
+
+    wb = load_workbook(BytesIO(r.content))
+    ws = wb["Cotización"]
+    rows = list(ws.iter_rows())
+    header_idx = next(i for i, row in enumerate(rows) if any(c.value == "Insumo" for c in row))
+    data_rows = [row for row in rows[header_idx + 1:] if row[1].value]
+    check("template lists every active material", len(data_rows) == len(mats_now))
+
+    # Pre-fill: register an offering, regenerate, and verify the cost column picks it up.
+    mat0 = mats_now[0]
+    r = client.post(
+        "/api/supplier-offerings",
+        headers=owner,
+        json={"supplier_id": sup_id, "material_id": mat0["id"], "cost_per_unit": 12.5, "min_order": 5, "lead_time_days": 3},
+    )
+    check("offering created for pre-fill test", r.status_code == 200)
+    wb2 = load_workbook(BytesIO(client.get(f"/api/suppliers/{sup_id}/quote-template", headers=owner).content))
+    ws2 = wb2["Cotización"]
+    rows2 = list(ws2.iter_rows())
+    h2 = next(i for i, row in enumerate(rows2) if any(c.value == "Insumo" for c in row))
+    col_idx = {c.value: n for n, c in enumerate(rows2[h2])}
+    prefilled = [row for row in rows2[h2 + 1:] if row[1].value == mat0["name"]]
+    check("offering cost pre-filled in template", bool(prefilled) and float(prefilled[0][col_idx["Costo actual (MXN)"]].value) == 12.5)
+    check("offering lead time pre-filled", bool(prefilled) and int(prefilled[0][col_idx["Lead time (días)"]].value) == 3)
+
+    check("cashier cannot download template (403)", client.get(f"/api/suppliers/{sup_id}/quote-template", headers=cashier).status_code == 403)
+    check("unknown supplier -> 404", client.get("/api/suppliers/nope/quote-template", headers=owner).status_code == 404)
+
+    print("\n== Supplier quote import (#19) ==")
+    XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    QUOTE_HEADERS = ["SKU", "Insumo", "Unidad", "Costo actual (MXN)", "Precio cotizado (MXN)", "Mínimo pedido", "Lead time (días)"]
+
+    def build_quote(rows, header_row=6):
+        wbq = Workbook()
+        wsq = wbq.active
+        wsq.title = "Cotización"
+        for i in range(1, header_row):
+            wsq.append(["SOLICITUD DE COTIZACIÓN"] if i == 1 else [])
+        wsq.append(QUOTE_HEADERS)
+        for r in rows:
+            wsq.append(r)
+        buf = BytesIO()
+        wbq.save(buf)
+        return buf.getvalue()
+
+    def upload_quote(payload, name="cotizacion.xlsx", hdrs=owner):
+        return client.post(f"/api/suppliers/{sup_id}/quote-import", headers=hdrs, files={"file": (name, payload, XLSX_MIME)})
+
+    # 1) Round-trip: download the template (#20), fill prices and send it back.
+    tpl_bytes = client.get(f"/api/suppliers/{sup_id}/quote-template", headers=owner).content
+    wb3 = load_workbook(BytesIO(tpl_bytes))
+    ws3 = wb3["Cotización"]
+    h3 = next(i for i, row in enumerate(ws3.iter_rows(max_row=10), start=1) if any(c.value == "Insumo" for c in row))
+    pcol = next(n + 1 for n, c in enumerate(ws3[h3]) if c.value and "Precio cotizado" in str(c.value))
+    ws3.cell(row=h3 + 1, column=pcol, value=42.75)   # mat0: existing offering (12.5) -> updated
+    ws3.cell(row=h3 + 1, column=6, value=8)
+    ws3.cell(row=h3 + 1, column=7, value=5)
+    ws3.cell(row=h3 + 2, column=pcol, value=18.90)   # second material: no offering -> created
+    ws3.cell(row=h3 + 2, column=6, value=3)
+    ws3.cell(row=h3 + 2, column=7, value=4)
+    buf = BytesIO()
+    wb3.save(buf)
+
+    r = upload_quote(buf.getvalue(), name="cotizacion_devuelta.xlsx")
+    check("quote import ok (200)", r.status_code == 200)
+    res = r.json()
+    imp_a = next((i for i in res.get("imported", []) if i["material_id"] == mat0["id"]), None)
+    imp_b = next((i for i in res.get("imported", []) if i["material_id"] == mats_now[1]["id"]), None)
+    check("existing offering updated with old/new cost", imp_a is not None and imp_a["action"] == "updated"
+          and imp_a["old_cost_per_unit"] == 12.5 and imp_a["new_cost_per_unit"] == 42.75
+          and imp_a["min_order"] == 8.0 and imp_a["lead_time_days"] == 5)
+    check("missing offering created", imp_b is not None and imp_b["action"] == "created"
+          and imp_b["new_cost_per_unit"] == 18.90 and imp_b["min_order"] == 3.0 and imp_b["lead_time_days"] == 4)
+    check("only priced rows imported", len(res.get("imported", [])) == 2 and res.get("not_found") == [])
+    check("blank-price rows reported as skipped", len(res.get("skipped", [])) == len(mats_now) - 2)
+
+    # 2) Persistence: a fresh template must show the imported offering values.
+    wb4 = load_workbook(BytesIO(client.get(f"/api/suppliers/{sup_id}/quote-template", headers=owner).content))
+    ws4 = wb4["Cotización"]
+    h4 = next(i for i, row in enumerate(ws4.iter_rows(max_row=10), start=1) if any(c.value == "Insumo" for c in row))
+    rows_by_name = {str(rw[1].value): rw for rw in ws4.iter_rows(min_row=h4 + 1) if rw[1].value}
+    ra, rb2 = rows_by_name[mat0["name"]], rows_by_name[mats_now[1]["name"]]
+    check("updated offering persisted (cost/min/lead)", round(float(ra[3].value), 2) == 42.75 and float(ra[5].value) == 8 and int(ra[6].value) == 5)
+    check("created offering persisted", round(float(rb2[3].value), 2) == 18.90 and float(rb2[5].value) == 3 and int(rb2[6].value) == 4)
+
+    # 3) Hand-crafted file: unknown material + invalid price are reported, not applied.
+    edge_mat = mats_now[2] if len(mats_now) > 2 else mat0
+    r = upload_quote(build_quote([["", "Insumo que no existe", "", None, 99.0], [None, edge_mat["name"], "", None, "N/D"]]))
+    check("unknown material reported in not_found", r.status_code == 200 and len(r.json().get("not_found", [])) == 1)
+    check("invalid price reported in skipped", len(r.json().get("skipped", [])) == 1 and r.json().get("imported") == [])
+
+    # 4) Header on row 1 (supplier removed the title rows) still parses.
+    r = upload_quote(build_quote([[None, edge_mat["name"], "", None, 7.25]], header_row=1))
+    check("header on first row accepted", r.status_code == 200 and len(r.json().get("imported", [])) == 1)
+
+    # 5) Error cases.
+    check("non-xlsx rejected (400)", upload_quote(b"hola mundo", name="cotizacion.txt").status_code == 400)
+    check("corrupted xlsx rejected (400)", upload_quote(b"PK\x03\x04 garbage", name="roto.xlsx").status_code == 400)
+    wb5 = Workbook()
+    ws5 = wb5.active
+    ws5.append(["Hola", "Mundo"])
+    buf = BytesIO(); wb5.save(buf)
+    check("file without quote headers rejected (400)", upload_quote(buf.getvalue()).status_code == 400)
+    check("unknown supplier -> 404", client.post("/api/suppliers/nope/quote-import", headers=owner, files={"file": ("c.xlsx", tpl_bytes, XLSX_MIME)}).status_code == 404)
+    check("cashier cannot import (403)", upload_quote(tpl_bytes, hdrs=cashier).status_code == 403)
+
     print("\n== Finance / P&L ==")
     pnl = client.get("/api/finance/pnl", headers=owner).json()
     check("pnl revenue > 0", pnl["revenue"] > 0)
@@ -201,6 +382,176 @@ with client:  # triggers startup (seed)
 
     dash = client.get("/api/finance/dashboard", headers=owner).json()
     check("dashboard today block", "today" in dash and "month" in dash)
+
+    # ------------------------------------------------------------------ P&L export (#21)
+    print("\n== P&L export (#21) ==")
+    r = client.get("/api/finance/pnl/export", headers=owner, params={"format": "xlsx"})
+    check(
+        "xlsx export 200 + content type",
+        r.status_code == 200 and "spreadsheetml" in (r.headers.get("content-type") or ""),
+    )
+    check("xlsx body is a zip archive", len(r.content) > 100 and r.content[:2] == b"PK")
+
+    def _xls_val(sheet, label):
+        for row in sheet.iter_rows():
+            if row[0].value == label and len(row) > 1:
+                return row[1].value
+        return None
+
+    wb = load_workbook(BytesIO(r.content), data_only=True)
+    check("xlsx sheets present", "P&L" in wb.sheetnames and "Serie diaria" in wb.sheetnames)
+    net_xls = _xls_val(wb["P&L"], "Utilidad neta")
+    check(
+        "xlsx net profit matches API",
+        net_xls is not None and abs(float(net_xls) - pnl2["net_profit"]) < 0.01,
+    )
+
+    r = client.get("/api/finance/pnl/export", headers=owner, params={"format": "pdf"})
+    check(
+        "pdf export 200 + content type",
+        r.status_code == 200 and (r.headers.get("content-type") or "").startswith("application/pdf"),
+    )
+    check("pdf magic bytes %PDF", len(r.content) > 500 and r.content[:4] == b"%PDF")
+
+    check(
+        "cashier cannot export P&L (403)",
+        client.get("/api/finance/pnl/export", headers=cashier, params={"format": "xlsx"}).status_code == 403,
+    )
+    check("invalid format rejected (400)", client.get("/api/finance/pnl/export", headers=owner, params={"format": "csv"}).status_code == 400)
+
+    print("\n== Cash movements / drawer open (#29) ==")
+    tid = client.get("/api/auth/me", headers=owner).json()["user"]["tenant_id"]
+    r = client.post("/api/cash-movements", headers=cashier, json={"type": "drawer_open", "reason": "Apertura de caja turno mañana"})
+    check("cashier opens drawer (audited)", r.status_code == 200)
+    mv = r.json()
+    check("movement scoped to tenant", mv["tenant_id"] == tid)
+    check("movement type is drawer_open", mv["type"] == "drawer_open")
+    check("movement stores reason", mv["reason"] == "Apertura de caja turno mañana")
+    check("movement records creator id", bool(mv.get("created_by_user_id")))
+    check("movement records creator name", bool(mv.get("created_by_name")))
+    check("movement has timestamp", bool(mv.get("created_at")))
+
+    r = client.post("/api/cash-movements", headers=owner, json={"type": "drawer_open", "reason": "Apertura por dueño"})
+    check("owner opens drawer (audited)", r.status_code == 200)
+
+    check("prep cannot open drawer (403)", client.post("/api/cash-movements", headers=prep, json={"type": "drawer_open", "reason": "x"}).status_code == 403)
+    check("missing reason rejected (400)", client.post("/api/cash-movements", headers=cashier, json={"type": "drawer_open"}).status_code == 400)
+    check("blank reason rejected (400)", client.post("/api/cash-movements", headers=cashier, json={"type": "drawer_open", "reason": "   "}).status_code == 400)
+    check("unsupported type rejected (400)", client.post("/api/cash-movements", headers=cashier, json={"type": "teleport", "reason": "x"}).status_code == 400)
+
+    print("\n== Manual cash deposits / withdrawals (#27) ==")
+    r = client.post("/api/cash-movements", headers=cashier, json={"type": "deposit", "amount": 500, "reason": "Depósito de caja turno"})
+    check("cashier deposits cash (audited)", r.status_code == 200)
+    dep = r.json()
+    check("deposit stores positive amount", dep.get("amount") == 500)
+    check("deposit records reason", dep["reason"] == "Depósito de caja turno")
+
+    r = client.post("/api/cash-movements", headers=cashier, json={"type": "withdrawal", "amount": 120.5, "reason": "Retiro para compras"})
+    check("cashier withdraws cash (audited)", r.status_code == 200)
+    wd = r.json()
+    check("withdrawal stores positive amount", wd.get("amount") == 120.5)
+
+    check("owner deposits cash (audited)", client.post("/api/cash-movements", headers=owner, json={"type": "deposit", "amount": 300, "reason": "Depósito dueño"}).status_code == 200)
+    check("owner withdraws cash (audited)", client.post("/api/cash-movements", headers=owner, json={"type": "withdrawal", "amount": 50, "reason": "Retiro dueño"}).status_code == 200)
+
+    check("deposit without amount rejected (400)", client.post("/api/cash-movements", headers=cashier, json={"type": "deposit", "reason": "x"}).status_code == 400)
+    check("zero deposit rejected (400)", client.post("/api/cash-movements", headers=cashier, json={"type": "deposit", "amount": 0, "reason": "x"}).status_code == 400)
+    check("negative withdrawal rejected (400)", client.post("/api/cash-movements", headers=cashier, json={"type": "withdrawal", "amount": -10, "reason": "x"}).status_code == 400)
+
+    log = client.get("/api/cash-movements", headers=cashier).json()
+    opens = [m for m in log if m["type"] == "drawer_open"]
+    check("audit log lists both opens", len(opens) >= 2)
+    check("audit log lists manual deposit", any(m["type"] == "deposit" and m.get("amount") == 500 for m in log))
+    check("audit log lists withdrawal", any(m["type"] == "withdrawal" and m.get("amount") == 120.5 for m in log))
+
+    print("\n== Cash auto-deposit on payment (#30) ==")
+    moves = client.get("/api/cash-movements", headers=cashier).json()
+    dep1 = next((m for m in moves if m["type"] == "deposit" and m.get("order_id") == order["id"]), None)
+    check("cash payment created auto deposit", dep1 is not None)
+    check("deposit amount equals total due", dep1["amount"] == round(order["total"], 2))
+    check("deposit reason references the order", f"#{order['order_number']}" in dep1["reason"])
+    dep_tip = next((m for m in moves if m["type"] == "deposit" and m.get("order_id") == tip_order["id"]), None)
+    check("tip deposit includes tip amount", dep_tip is not None and dep_tip["amount"] == round(tip_order["total"] + tip_amount, 2))
+
+    r = client.post("/api/orders", headers=cashier, json={"items": [{"product_id": refresco["id"], "qty": 1}]})
+    card_order = r.json()
+    check("card order paid", client.post(f"/api/orders/{card_order['id']}/pay", headers=cashier, json={"method": "tarjeta"}).status_code == 200)
+    moves2 = client.get("/api/cash-movements", headers=cashier).json()
+    check("card payment creates no cash movement", not any(m["type"] == "deposit" and m.get("order_id") == card_order["id"] for m in moves2))
+
+    print("\n== AI supplier price comparison (#18) ==")
+    # Enable the AI flag and stub the LLM call so this suite stays offline:
+    # we test access control, report shape and read-only behavior, not the model.
+    routes_ai.AI_ENABLED = True
+    captured_prompts = []
+
+    async def _fake_completion(messages):
+        captured_prompts.append(messages)
+        return "Resumen de precios: 1 insumo subió y 1 bajó respecto al costo actual."
+
+    routes_ai._plain_completion = _fake_completion
+
+    tid18 = client.get("/api/auth/me", headers=owner).json()["user"]["tenant_id"]
+    mats18 = client.get("/api/materials", headers=owner).json()
+    base_mat = next(m for m in mats18 if (m.get("cost_per_unit") or 0) > 0)
+    costs_before = {m["id"]: m.get("cost_per_unit") for m in mats18}
+
+    loop18 = asyncio.new_event_loop()
+    base_cost = float(base_mat["cost_per_unit"])
+    fixtures = (("sup-18-a", "Proveedor Norte", round(base_cost * 1.10, 4)), ("sup-18-b", "Proveedor Sur", round(base_cost * 0.95, 4)))
+    for sup_id, sup_name, price in fixtures:
+        loop18.run_until_complete(db.suppliers.insert_one({"id": sup_id, "tenant_id": tid18, "name": sup_name}))
+        loop18.run_until_complete(db.supplier_offerings.insert_one({
+            "id": f"off-18-{sup_id}", "tenant_id": tid18, "supplier_id": sup_id,
+            "material_id": base_mat["id"], "cost_per_unit": price, "min_order": 5.0,
+            "lead_time_days": 3, "last_price_update": "2026-09-01", "active": True,
+            "created_at": now_iso(), "updated_at": now_iso(),
+        }))
+
+    r = client.post("/api/ai/supplier-price-comparison", headers=owner)
+    check("owner gets plain-text comparison report", r.status_code == 200 and isinstance(r.json().get("content"), str) and len(r.json()["content"]) > 10)
+    prompt_text = json.dumps(captured_prompts, ensure_ascii=False) if captured_prompts else ""
+    check("prompt carries material + supplier data", base_mat["name"] in prompt_text and "Proveedor Norte" in prompt_text and "Proveedor Sur" in prompt_text)
+    check("cashier blocked from comparison (403)", client.post("/api/ai/supplier-price-comparison", headers=cashier).status_code == 403)
+
+    costs_after = {m["id"]: m.get("cost_per_unit") for m in client.get("/api/materials", headers=owner).json()}
+    check("report is read-only: material costs unchanged", costs_before == costs_after)
+
+    print("\n== Business description in AI prompts (#14) ==")
+    s0 = client.get("/api/settings", headers=owner).json()
+    check("settings exposes business_description (unset)", s0.get("business_description") is None)
+
+    captured_prompts.clear()
+    r = client.post("/api/ai/supplier-price-comparison", headers=owner)
+    prompt_text = json.dumps(captured_prompts, ensure_ascii=False) if captured_prompts else ""
+    check("no business context injected when unset", r.status_code == 200 and "Contexto del negocio" not in prompt_text)
+
+    desc14 = "Cantina familiar de cocina mexicana en Guadalajara; menu enfocado en birrias y antojitos, horario 13:00-23:00."
+    r = client.put("/api/settings", headers=owner, json={"business_description": desc14})
+    check("PUT settings stores business_description", r.status_code == 200 and r.json().get("business_description") == desc14)
+    check("GET settings returns stored description", client.get("/api/settings", headers=owner).json().get("business_description") == desc14)
+
+    captured_prompts.clear()
+    r = client.post("/api/ai/supplier-price-comparison", headers=owner)
+    prompt_text = json.dumps(captured_prompts, ensure_ascii=False) if captured_prompts else ""
+    check("description injected into comparison prompt when set", r.status_code == 200 and "Contexto del negocio" in prompt_text and desc14 in prompt_text)
+
+    r = client.put("/api/settings", headers=owner, json={"business_description": ""})
+    check("PUT settings accepts empty description", r.status_code == 200 and r.json().get("business_description") == "")
+    captured_prompts.clear()
+    r = client.post("/api/ai/supplier-price-comparison", headers=owner)
+    prompt_text = json.dumps(captured_prompts, ensure_ascii=False) if captured_prompts else ""
+    check("empty description is not injected into the prompt", r.status_code == 200 and "Contexto del negocio" not in prompt_text)
+
+    ctx14 = loop18.run_until_complete(routes_ai._business_context(tid18))
+    check("_business_context returns '' for empty description (chat path)", ctx14 == "")
+    client.put("/api/settings", headers=owner, json={"business_description": desc14})
+    ctx14 = loop18.run_until_complete(routes_ai._business_context(tid18))
+    check("_business_context returns the context block when set", "Contexto del negocio" in ctx14 and desc14 in ctx14)
+    check("cashier cannot update settings (403)", client.put("/api/settings", headers=cashier, json={"business_description": "x"}).status_code == 403)
+
+    loop18.run_until_complete(db.supplier_offerings.update_many({"tenant_id": tid18, "active": True}, {"$set": {"active": False}}))
+    check("no active offerings -> 400", client.post("/api/ai/supplier-price-comparison", headers=owner).status_code == 400)
 
 print(f"\n==== RESULT: {PASS} passed, {FAIL} failed ====")
 raise SystemExit(1 if FAIL else 0)

@@ -213,6 +213,7 @@ class OrderCreate(BaseModel):
     items: List[OrderItemInput]
     customer_name: Optional[str] = ""
     table: Optional[str] = ""
+    party_size: Optional[int] = Field(None, ge=1)  # número de personas (mesas)
     order_type: str = "comer_aqui"  # comer_aqui | para_llevar
     notes: Optional[str] = ""
     sales_channel_code: str = "counter"  # code from SALES_CHANNELS: counter, phone, uber_eats, rappi, didi_food
@@ -237,6 +238,14 @@ class PaymentRequest(BaseModel):
 
 class PaymentMethodUpdate(BaseModel):
     method: str  # efectivo | tarjeta | transferencia — solo el método, nunca totales
+
+
+class PartySizeUpdate(BaseModel):
+    party_size: int = Field(..., ge=1)  # >= 1 persona; pydantic devuelve 422 si no
+
+
+class CancelOrderRequest(BaseModel):
+    cancel_reason: str = Field(..., min_length=1)  # motivo obligatorio; pydantic devuelve 422 si falta o está vacío
 
 
 # ---------------------------------------------------------------------------
@@ -303,6 +312,7 @@ class SettingsUpdate(BaseModel):
     currency: Optional[str] = None
     tax_rate: Optional[float] = None  # e.g. 0.16 for 16% IVA
     tax_included: Optional[bool] = None  # whether prices already include tax
+    business_description: Optional[str] = None  # #14: free-text description of the business, injected into AI prompts when set
     fiscal_config: Optional[FiscalConfig] = None
     # Theme colors (hex, e.g. "#080c14"); empty/None = default palette.
     theme_bg: Optional[str] = None
@@ -314,6 +324,19 @@ class SettingsUpdate(BaseModel):
     display_text: Optional[str] = None
     display_prep: Optional[str] = None   # "en preparación" accent
     display_ready: Optional[str] = None  # "listo" accent
+
+
+# ---------------------------------------------------------------------------
+# Cash movements (movimientos de caja con auditoría) — #29
+# ---------------------------------------------------------------------------
+class CashMovementCreate(BaseModel):
+    type: str  # drawer_open | deposit | withdrawal
+    amount: Optional[float] = None  # obligatorio y > 0 para deposit/withdrawal; validado en la ruta
+    reason: Optional[str] = None  # motivo obligatorio; validado en la ruta (400 si vacío)
+
+
+# Tipos de movimiento soportados (#27: depósitos y retiros manuales).
+CASH_MOVEMENT_TYPES = {"drawer_open", "deposit", "withdrawal"}
 
 
 # ---------------------------------------------------------------------------

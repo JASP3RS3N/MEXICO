@@ -81,5 +81,20 @@ async def settle_order(order: dict, method: str, amount_received, actor: dict, t
     if not order.get("delivered_at"):
         updates["delivered_at"] = now_iso()
     await db.orders.update_one(tenant_query(tenant_id, {"id": order["id"]}), {"$set": updates})
+
+    # #30: cash payments automatically generate an audited deposit into the drawer.
+    if method == "efectivo":
+        await db.cash_movements.insert_one({
+            "id": gen_id(),
+            "tenant_id": tenant_id,
+            "type": "deposit",
+            "amount": total_due,
+            "reason": f"Depósito automático — orden #{order['order_number']}",
+            "order_id": order["id"],
+            "created_by_user_id": actor.get("id"),
+            "created_by_name": actor.get("name", ""),
+            "created_at": now_iso(),
+        })
+
     fresh = await db.orders.find_one(tenant_query(tenant_id, {"id": order["id"]}), {"_id": 0})
     return fresh, change
