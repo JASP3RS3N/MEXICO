@@ -85,6 +85,27 @@ with client:  # triggers startup (seed)
     new_id = r.json()["id"]
     check("owner deletes user", client.delete(f"/api/users/{new_id}", headers=owner).status_code == 200)
 
+    print("\n== Authorized devices (#10) ==")
+    r = client.post("/api/devices/register", headers=owner, json={"device_id": "dev-smoke-1", "label": "Caja principal"})
+    check("register first device ok", r.status_code == 200 and r.json()["device"]["is_active"] is True)
+    r = client.post("/api/devices/register", headers=owner, json={"device_id": "dev-smoke-2"})
+    check("second device reaches the limit of 2", r.status_code == 200 and r.json()["device"]["is_active"] is True)
+    r = client.post("/api/devices/register", headers=owner, json={"device_id": "dev-smoke-3"})
+    check("third active device rejected (403)", r.status_code == 403)
+    r = client.post("/api/devices/register", headers=owner, json={"device_id": "dev-smoke-1"})
+    check("re-registering an active device is idempotent", r.status_code == 200 and r.json()["device"]["is_active"] is True)
+    lst = client.get("/api/devices", headers=owner).json()
+    check("list shows devices, active_count and limit", len(lst["devices"]) == 2 and lst["active_count"] == 2 and lst["limit"] == 2)
+    r = client.post("/api/devices/dev-smoke-1/deactivate", headers=owner)
+    check("deactivation sets is_active=false", r.status_code == 200 and r.json()["device"]["is_active"] is False)
+    r = client.post("/api/devices/register", headers=owner, json={"device_id": "dev-smoke-3"})
+    check("deactivated slot freed: third device now registers", r.status_code == 200 and r.json()["device"]["is_active"] is True)
+    r = client.post("/api/devices/register", headers=owner, json={"device_id": "dev-smoke-1"})
+    check("reactivating a deactivated device at limit -> 403", r.status_code == 403)
+    check("deactivate unknown device -> 404", client.post("/api/devices/dev-nope/deactivate", headers=owner).status_code == 404)
+    check("cashier cannot register devices (403)", client.post("/api/devices/register", headers=cashier, json={"device_id": "dev-x"}).status_code == 403)
+    check("cashier cannot list devices (403)", client.get("/api/devices", headers=cashier).status_code == 403)
+
     print("\n== Price edit (owner only) ==")
     p0 = products[0]
     check("cashier cannot change price (403)", client.patch(f"/api/products/{p0['id']}/price", headers=cashier, json={"price": 1}).status_code == 403)
@@ -495,6 +516,7 @@ with client:  # triggers startup (seed)
 
     costs_after = {m["id"]: m.get("cost_per_unit") for m in client.get("/api/materials", headers=owner).json()}
     check("report is read-only: material costs unchanged", costs_before == costs_after)
+
 
     loop18.run_until_complete(db.supplier_offerings.update_many({"tenant_id": tid18, "active": True}, {"$set": {"active": False}}))
     check("no active offerings -> 400", client.post("/api/ai/supplier-price-comparison", headers=owner).status_code == 400)
