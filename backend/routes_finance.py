@@ -488,6 +488,7 @@ async def get_settings(user: dict = Depends(get_current_user)):
         "currency": "MXN",
         "tax_rate": 0.16,
         "tax_included": True,
+        "business_description": None,  # #14: optional; injected into AI prompts when set
     }
     return _scrub_fiscal_config(s)
 

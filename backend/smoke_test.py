@@ -517,6 +517,38 @@ with client:  # triggers startup (seed)
     costs_after = {m["id"]: m.get("cost_per_unit") for m in client.get("/api/materials", headers=owner).json()}
     check("report is read-only: material costs unchanged", costs_before == costs_after)
 
+    print("\n== Business description in AI prompts (#14) ==")
+    s0 = client.get("/api/settings", headers=owner).json()
+    check("settings exposes business_description (unset)", s0.get("business_description") is None)
+
+    captured_prompts.clear()
+    r = client.post("/api/ai/supplier-price-comparison", headers=owner)
+    prompt_text = json.dumps(captured_prompts, ensure_ascii=False) if captured_prompts else ""
+    check("no business context injected when unset", r.status_code == 200 and "Contexto del negocio" not in prompt_text)
+
+    desc14 = "Cantina familiar de cocina mexicana en Guadalajara; menu enfocado en birrias y antojitos, horario 13:00-23:00."
+    r = client.put("/api/settings", headers=owner, json={"business_description": desc14})
+    check("PUT settings stores business_description", r.status_code == 200 and r.json().get("business_description") == desc14)
+    check("GET settings returns stored description", client.get("/api/settings", headers=owner).json().get("business_description") == desc14)
+
+    captured_prompts.clear()
+    r = client.post("/api/ai/supplier-price-comparison", headers=owner)
+    prompt_text = json.dumps(captured_prompts, ensure_ascii=False) if captured_prompts else ""
+    check("description injected into comparison prompt when set", r.status_code == 200 and "Contexto del negocio" in prompt_text and desc14 in prompt_text)
+
+    r = client.put("/api/settings", headers=owner, json={"business_description": ""})
+    check("PUT settings accepts empty description", r.status_code == 200 and r.json().get("business_description") == "")
+    captured_prompts.clear()
+    r = client.post("/api/ai/supplier-price-comparison", headers=owner)
+    prompt_text = json.dumps(captured_prompts, ensure_ascii=False) if captured_prompts else ""
+    check("empty description is not injected into the prompt", r.status_code == 200 and "Contexto del negocio" not in prompt_text)
+
+    ctx14 = loop18.run_until_complete(routes_ai._business_context(tid18))
+    check("_business_context returns '' for empty description (chat path)", ctx14 == "")
+    client.put("/api/settings", headers=owner, json={"business_description": desc14})
+    ctx14 = loop18.run_until_complete(routes_ai._business_context(tid18))
+    check("_business_context returns the context block when set", "Contexto del negocio" in ctx14 and desc14 in ctx14)
+    check("cashier cannot update settings (403)", client.put("/api/settings", headers=cashier, json={"business_description": "x"}).status_code == 403)
 
     loop18.run_until_complete(db.supplier_offerings.update_many({"tenant_id": tid18, "active": True}, {"$set": {"active": False}}))
     check("no active offerings -> 400", client.post("/api/ai/supplier-price-comparison", headers=owner).status_code == 400)

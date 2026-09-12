@@ -312,6 +312,7 @@ class SettingsUpdate(BaseModel):
     currency: Optional[str] = None
     tax_rate: Optional[float] = None  # e.g. 0.16 for 16% IVA
     tax_included: Optional[bool] = None  # whether prices already include tax
+    business_description: Optional[str] = None  # #14: free-text description of the business, injected into AI prompts when set
     fiscal_config: Optional[FiscalConfig] = None
     # Theme colors (hex, e.g. "#080c14"); empty/None = default palette.
     theme_bg: Optional[str] = None
